@@ -187,3 +187,102 @@ MAX_RECENT_CLIP_LOOKBACK=100
 - Video is uploaded to YouTube with metadata.
 - State is updated so next run avoids same assets.
 - Run report is saved for every execution.
+
+
+1) Product/контент стратегия
+Зафиксировать формат канала: длина роликов, частота, стиль (nature/surf/lofi).
+Определить KPI: просмотры, CTR, watch time, retention, RPM.
+Сделать контент-план на 30 дней (темы, mood, время публикации).
+Описать правила нейминга видео и плейлистов.
+2) Легальность и безопасность
+Подтвердить лицензии источников видео (Pexels/Pixabay/платные стоки).
+Зафиксировать политику атрибуции (когда обязательна и в каком формате).
+Добавить хранение лицензий в run-report (source_url, author, license).
+Настроить проверку “не брать запрещенный контент/бренды/лица без прав”.
+Подготовить шаблон ответа на possible copyright claim.
+3) Инфраструктура проекта
+Довести структуру репозитория до production-ready (src/tests/scripts/docs).
+Добавить Makefile/скрипты run, test, lint, format.
+Настроить pre-commit (ruff/black/pytest).
+Добавить версионирование release notes (changelog).
+4) Конфигурация и секреты
+Заполнить .env по .env.example.
+Настроить секреты в Railway Variables.
+Вынести все runtime-параметры в env (duration, tags, schedule, retries).
+Добавить валидацию env с понятными ошибками.
+5) Музыкальная библиотека
+Загрузить треки в assets/tracks.
+Добавить метаданные треков (title, bpm, mood, duration, is_released).
+Реализовать политику выбора трека (anti-repeat + mood-based).
+Добавить проверку качества аудио (битрейт, отсутствие клиппинга).
+6) Пайплайн видео-ассетов
+Расширить загрузчик клипов (несколько запросов, pagination, retries).
+Улучшить фильтрацию клипов (fps, ориентация, артефакты, watermark risk).
+Добавить дедупликацию по source id/url/hash.
+Настроить очистку временных файлов после успешного run.
+7) Рендер и монтаж
+Улучшить FFmpeg pipeline: кроссфейды, стабилизация loudness, target LUFS.
+Добавить режимы роликов (15/30/60 min preset).
+Добавить template overlay (название трека/канал).
+Добавить автогенерацию thumbnail (кадр + текст).
+Валидация финального файла (codec, duration, resolution).
+8) Метаданные и SEO
+Шаблоны title/description/tags под разные “mood scenes”.
+Генерация 2–3 вариантов title и выбор лучшего по правилам.
+Добавить playlist assignment при upload.
+Добавить стандартные блоки в description (credits, links, hashtags).
+Подготовить мультиязычный режим (RU/EN).
+9) YouTube API интеграция
+Завершить OAuth setup (refresh token, scopes, test upload).
+Добавить private -> scheduled -> public flow.
+Реализовать retry для resumable upload.
+Добавить сохранение video_id, publishedAt, privacyStatus.
+Добавить защиту от повторной загрузки одного и того же файла.
+10) Оркестрация и расписание (Railway)
+Задеплоить сервис в Railway по Dockerfile.
+Настроить Cron Job (например, каждые 72 часа).
+Проверить перезапуски и retry policy.
+Настроить persistent storage или внешний DB для state.
+Сделать dry-run задачу (без upload) для безопасной проверки.
+11) Хранилище состояния и отчеты
+Расширить state.db (таблицы: assets, renders, uploads, failures).
+Сохранять полный run-report в data/runs.
+Добавить статус-машину run (started/failed/rendered/uploaded/scheduled).
+Добавить миграции схемы БД.
+Добавить экспорт отчета в JSON/CSV.
+12) Наблюдаемость и алерты
+Структурированные логи по этапам.
+Добавить метрики по длительности этапов.
+Уведомления в Telegram/Discord: success/fail + причина.
+Алерт при N подряд неудачных запусков.
+Dashboard для последних запусков и статусов.
+13) Тестирование (обязательно)
+Unit tests для всех модулей (часть уже сделана).
+Integration tests с моками Pexels/YouTube/FFmpeg.
+E2E dry-run тест полного пайплайна.
+Smoke test после деплоя на Railway.
+Регулярный запуск тестов в CI.
+14) CI/CD
+Настроить GitHub Actions: lint + tests + build image.
+Проверка Docker сборки на каждом PR.
+Автодеплой в Railway из main.
+Environment promotion (staging -> production).
+Политика rollback.
+15) Анти-спам и качество канала
+Правила уникальности контента (не повторять клипы слишком часто).
+Авто-микс сцены/треки для различий между роликами.
+Разные шаблоны thumbnail/title.
+Контроль “reused content risk”.
+Регулярный аудит последних публикаций.
+16) Аналитика и оптимизация
+Сбор YouTube Analytics (CTR, retention, avg view duration).
+A/B тестирование title/thumbnail.
+Правила авто-коррекции (если CTR низкий -> менять стиль title).
+Подбор лучших временных окон публикации.
+Еженедельный auto-report.
+17) Документация и эксплуатация
+OPERATIONS.md: как запускать, дебажить, восстанавливать.
+INCIDENTS.md: типовые ошибки и что делать.
+Четкий onboarding чеклист.
+Runbook для ручного override публикации.
+План развития v2 (multi-platform, AI editor, dashboard UI).

@@ -10,9 +10,10 @@ from .config import load_config
 from .fetch_assets import fetch_and_download_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
+from .notify_n8n import send_run_notification
 from .render_video import render_video_with_ffmpeg
 from .select_track import choose_track
-from .state_store import RunRecord, StateStore
+from .state_store import RunRecord, create_state_store
 from .upload_youtube import upload_video
 
 
@@ -25,7 +26,7 @@ def _write_run_report(report_path: Path, payload: dict) -> None:
 def run() -> None:
     logger = setup_logger()
     config = load_config()
-    store = StateStore(config.state_db_path)
+    store = create_state_store(config.state_db_path, database_url=config.database_url)
     now = datetime.now(timezone.utc)
     run_id = now.strftime("%Y%m%dT%H%M%SZ")
     report_path = config.runs_dir / f"{run_id}.json"
@@ -55,6 +56,8 @@ def run() -> None:
             min_width=config.target_width,
             min_height=config.target_height,
             recently_used_clip_urls=recent_clips,
+            per_page=config.pexels_per_page,
+            pages_per_tag=config.pexels_pages_per_tag,
         )
         if not clips:
             raise RuntimeError("No valid clips fetched from Pexels.")
@@ -109,6 +112,7 @@ def run() -> None:
                 "source_url": c.source_url,
                 "download_url": c.download_url,
                 "author_name": c.author_name,
+                "license": c.license,
                 "local_path": str(c.local_path),
             }
             for c in clips
@@ -147,6 +151,10 @@ def run() -> None:
     finally:
         report_payload["finished_at"] = datetime.now(timezone.utc).isoformat()
         _write_run_report(report_path, report_payload)
+        try:
+            send_run_notification(config.n8n_webhook_url, report_payload)
+        except Exception as notify_exc:  # noqa: BLE001
+            logger.warning("Failed to notify n8n webhook: %s", notify_exc)
         store.close()
 
 

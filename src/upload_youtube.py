@@ -3,10 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-
 from .generate_meta import VideoMeta
 
 
@@ -27,6 +23,10 @@ def upload_video(
     default_language: str = "en",
     publish_at_iso: str = "",
 ) -> UploadResult:
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+
     creds = Credentials(
         token=None,
         refresh_token=refresh_token,

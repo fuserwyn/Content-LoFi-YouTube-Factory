@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import random
+import time
 import requests
 
 
@@ -19,6 +20,7 @@ class ClipAsset:
     width: int
     height: int
     duration: int
+    license: str
 
 
 def _choose_file(video_files: list[dict], min_width: int, min_height: int) -> dict | None:
@@ -43,16 +45,17 @@ def fetch_and_download_clips(
     min_width: int,
     min_height: int,
     recently_used_clip_urls: set[str],
+    per_page: int = 30,
+    pages_per_tag: int = 2,
 ) -> list[ClipAsset]:
     headers = {"Authorization": api_key}
     candidates: list[dict] = []
 
     for tag in tags:
-        params = {"query": tag, "per_page": 30}
-        response = requests.get(PEXELS_SEARCH_URL, headers=headers, params=params, timeout=45)
-        response.raise_for_status()
-        payload = response.json()
-        candidates.extend(payload.get("videos", []))
+        for page in range(1, pages_per_tag + 1):
+            params = {"query": tag, "per_page": per_page, "page": page}
+            payload = _request_with_retry(headers=headers, params=params)
+            candidates.extend(payload.get("videos", []))
 
     random.shuffle(candidates)
     selected: list[ClipAsset] = []
@@ -95,6 +98,7 @@ def fetch_and_download_clips(
                 width=int(chosen_file.get("width", 0)),
                 height=int(chosen_file.get("height", 0)),
                 duration=duration,
+                license="pexels-license",
             )
         )
 
@@ -108,3 +112,19 @@ def _download_file(url: str, destination: Path) -> None:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     file.write(chunk)
+
+
+def _request_with_retry(headers: dict, params: dict, max_attempts: int = 3) -> dict:
+    delay = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.get(PEXELS_SEARCH_URL, headers=headers, params=params, timeout=45)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            if attempt >= max_attempts:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+    return {}

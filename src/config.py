@@ -31,6 +31,10 @@ class AppConfig:
     data_dir: Path
     runs_dir: Path
     state_db_path: Path
+    database_url: str
+    pexels_per_page: int
+    pexels_pages_per_tag: int
+    n8n_webhook_url: str
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -87,4 +91,8 @@ def load_config() -> AppConfig:
         data_dir=data_dir,
         runs_dir=runs_dir,
         state_db_path=state_db_path,
+        database_url=os.getenv("DATABASE_URL", "").strip(),
+        pexels_per_page=int(os.getenv("PEXELS_PER_PAGE", "30")),
+        pexels_pages_per_tag=int(os.getenv("PEXELS_PAGES_PER_TAG", "2")),
+        n8n_webhook_url=os.getenv("N8N_WEBHOOK_URL", "").strip(),
     )
