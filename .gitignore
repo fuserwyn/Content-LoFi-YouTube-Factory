@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+data/state.db
+data/runs/*.json
+temp/clips/*
+temp/renders/*
+!.gitkeep
