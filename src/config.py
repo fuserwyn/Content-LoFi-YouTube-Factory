@@ -35,6 +35,10 @@ class AppConfig:
     pexels_per_page: int
     pexels_pages_per_tag: int
     n8n_webhook_url: str
+    cleanup_temp_after_run: bool
+    keep_final_output: bool
+    render_preset: str
+    render_crf: int
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -95,4 +99,8 @@ def load_config() -> AppConfig:
         pexels_per_page=int(os.getenv("PEXELS_PER_PAGE", "30")),
         pexels_pages_per_tag=int(os.getenv("PEXELS_PAGES_PER_TAG", "2")),
         n8n_webhook_url=os.getenv("N8N_WEBHOOK_URL", "").strip(),
+        cleanup_temp_after_run=_parse_bool("CLEANUP_TEMP_AFTER_RUN", True),
+        keep_final_output=_parse_bool("KEEP_FINAL_OUTPUT", False),
+        render_preset=os.getenv("RENDER_PRESET", "veryfast").strip() or "veryfast",
+        render_crf=int(os.getenv("RENDER_CRF", "23")),
     )

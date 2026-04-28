@@ -29,6 +29,8 @@ def render_video_with_ffmpeg(
     width: int,
     height: int,
     fps: int,
+    encode_preset: str = "veryfast",
+    crf: int = 23,
 ) -> RenderResult:
     if not clips:
         raise RuntimeError("No clips available for rendering.")
@@ -68,7 +70,7 @@ def render_video_with_ffmpeg(
                 "-c:v",
                 "libx264",
                 "-preset",
-                "veryfast",
+                encode_preset,
                 "-pix_fmt",
                 "yuv420p",
                 str(normalized_file),
@@ -113,7 +115,9 @@ def render_video_with_ffmpeg(
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            encode_preset,
+            "-crf",
+            str(crf),
             "-pix_fmt",
             "yuv420p",
             "-c:a",

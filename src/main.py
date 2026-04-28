@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import shutil
 import traceback
 
 from .config import load_config
@@ -21,6 +22,20 @@ def _write_run_report(report_path: Path, payload: dict) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=True, indent=2)
+
+
+def _cleanup_temp_files(temp_clips_dir: Path, temp_renders_dir: Path, keep_final_output: bool) -> None:
+    for file_path in temp_clips_dir.glob("*"):
+        if file_path.is_file():
+            file_path.unlink(missing_ok=True)
+
+    for path in temp_renders_dir.glob("*"):
+        if keep_final_output and path.name == "final.mp4":
+            continue
+        if path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def run() -> None:
@@ -75,6 +90,8 @@ def run() -> None:
             width=config.target_width,
             height=config.target_height,
             fps=config.fps,
+            encode_preset=config.render_preset,
+            crf=config.render_crf,
         )
         output_path = str(render_result.output_path)
 
@@ -155,6 +172,12 @@ def run() -> None:
             send_run_notification(config.n8n_webhook_url, report_payload)
         except Exception as notify_exc:  # noqa: BLE001
             logger.warning("Failed to notify n8n webhook: %s", notify_exc)
+        if config.cleanup_temp_after_run:
+            _cleanup_temp_files(
+                temp_clips_dir=config.temp_clips_dir,
+                temp_renders_dir=config.temp_renders_dir,
+                keep_final_output=config.keep_final_output,
+            )
         store.close()
 
 
