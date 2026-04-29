@@ -36,4 +36,7 @@ Set these in the n8n service:
 - For the TikTok cuts workflow:
   - Open node `Set TikTok Payload`
   - Set `source_video_path` to the absolute path in your storage/volume
-  - Optional: set `clips_count`, `clip_seconds`, `tracks_dir`, `output_dir`
+  - `clips_count=0` enables auto split into as many clips as source video allows
+  - Optional: set `clip_min_seconds` and `clip_max_seconds` for varied clip lengths
+  - Optional: set `tracks_dir`, `output_dir`
+  - If `TELEGRAM_SEND_TIKTOK=true`, clips are sent to Telegram one by one as each clip finishes

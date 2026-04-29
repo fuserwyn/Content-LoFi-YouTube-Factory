@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import random
 import subprocess
+from typing import Callable
 
 from .select_track import SUPPORTED_EXTENSIONS
 
@@ -28,6 +29,9 @@ def create_tiktok_cuts(
     fps: int,
     encode_preset: str,
     crf: int,
+    clip_min_seconds: int | None = None,
+    clip_max_seconds: int | None = None,
+    on_clip_ready: Callable[[TikTokClipResult], None] | None = None,
 ) -> list[TikTokClipResult]:
     if not source_video_path.exists():
         raise RuntimeError(f"TikTok source video not found: {source_video_path}")
@@ -41,15 +45,20 @@ def create_tiktok_cuts(
     if source_duration is None:
         raise RuntimeError(f"Unable to probe source duration for TikTok cuts: {source_video_path}")
 
-    timeline = _pick_starts(duration_seconds=source_duration, clips_count=clips_count, clip_seconds=clip_seconds)
+    timeline = _build_timeline(
+        duration_seconds=source_duration,
+        clips_count=clips_count,
+        clip_seconds=clip_seconds,
+        clip_min_seconds=clip_min_seconds,
+        clip_max_seconds=clip_max_seconds,
+    )
     shuffled_tracks = tracks[:]
     random.shuffle(shuffled_tracks)
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     results: list[TikTokClipResult] = []
-    for index, start_second in enumerate(timeline):
+    for index, (start_second, duration_second) in enumerate(timeline):
         track_path = shuffled_tracks[index % len(shuffled_tracks)]
-        duration_second = min(clip_seconds, max(1, source_duration - start_second))
         output_path = output_dir / f"tiktok_{run_stamp}_{index + 1:02d}.mp4"
         _render_one_clip(
             source_video_path=source_video_path,
@@ -71,6 +80,8 @@ def create_tiktok_cuts(
                 duration_second=duration_second,
             )
         )
+        if on_clip_ready is not None:
+            on_clip_ready(results[-1])
     return results
 
 
@@ -108,23 +119,45 @@ def _probe_media_duration_seconds(path: Path) -> int | None:
         return None
 
 
-def _pick_starts(duration_seconds: int, clips_count: int, clip_seconds: int) -> list[int]:
+def _build_timeline(
+    duration_seconds: int,
+    clips_count: int,
+    clip_seconds: int,
+    clip_min_seconds: int | None,
+    clip_max_seconds: int | None,
+) -> list[tuple[int, int]]:
+    if clips_count <= 0:
+        # Auto mode: split sequentially until source is exhausted.
+        segments: list[tuple[int, int]] = []
+        elapsed = 0
+        min_sec = max(5, clip_min_seconds or clip_seconds)
+        max_sec = max(min_sec, clip_max_seconds or clip_seconds)
+        while elapsed < duration_seconds:
+            remaining = duration_seconds - elapsed
+            duration = remaining if remaining <= min_sec else min(remaining, random.randint(min_sec, max_sec))
+            segments.append((elapsed, max(1, duration)))
+            elapsed += duration
+        return segments
+
     max_start = max(0, duration_seconds - clip_seconds)
     if clips_count <= 1:
-        return [0 if max_start == 0 else random.randint(0, max_start)]
+        start = 0 if max_start == 0 else random.randint(0, max_start)
+        return [(start, min(clip_seconds, max(1, duration_seconds - start)))]
 
     if max_start == 0:
-        return [0 for _ in range(clips_count)]
+        return [(0, max(1, duration_seconds)) for _ in range(clips_count)]
 
-    starts = []
+    starts: list[tuple[int, int]] = []
     step = max_start / clips_count
     for i in range(clips_count):
         bucket_start = int(i * step)
         bucket_end = int((i + 1) * step) if i < clips_count - 1 else max_start
         if bucket_end <= bucket_start:
-            starts.append(bucket_start)
+            start = bucket_start
+            starts.append((start, min(clip_seconds, max(1, duration_seconds - start))))
             continue
-        starts.append(random.randint(bucket_start, bucket_end))
+        start = random.randint(bucket_start, bucket_end)
+        starts.append((start, min(clip_seconds, max(1, duration_seconds - start))))
     return starts
 
 

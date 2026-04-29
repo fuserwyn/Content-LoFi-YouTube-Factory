@@ -25,13 +25,25 @@
             {
               "id": "clips-count",
               "name": "clips_count",
-              "value": 4,
+              "value": 0,
               "type": "number"
             },
             {
               "id": "clip-seconds",
               "name": "clip_seconds",
               "value": 30,
+              "type": "number"
+            },
+            {
+              "id": "clip-min-seconds",
+              "name": "clip_min_seconds",
+              "value": 20,
+              "type": "number"
+            },
+            {
+              "id": "clip-max-seconds",
+              "name": "clip_max_seconds",
+              "value": 35,
               "type": "number"
             },
             {

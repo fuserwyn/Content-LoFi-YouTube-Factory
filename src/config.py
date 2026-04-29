@@ -53,6 +53,9 @@ class AppConfig:
     tiktok_width: int
     tiktok_height: int
     tiktok_output_dir: Path
+    telegram_send_tiktok: bool
+    telegram_bot_token: str
+    telegram_chat_id: str
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -148,4 +151,7 @@ def load_config() -> AppConfig:
         tiktok_width=max(360, int(os.getenv("TIKTOK_WIDTH", "1080"))),
         tiktok_height=max(640, int(os.getenv("TIKTOK_HEIGHT", "1920"))),
         tiktok_output_dir=resolved_tiktok_output_dir,
+        telegram_send_tiktok=_parse_bool("TELEGRAM_SEND_TIKTOK", False),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
     )

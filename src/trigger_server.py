@@ -10,7 +10,8 @@ import uvicorn
 from .config import AppConfig
 from .logger import setup_logger
 from .main import run as pipeline_run
-from .tiktok_cuts import create_tiktok_cuts
+from .notify_telegram import send_files_to_telegram
+from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 
 
 class RunRequest(BaseModel):
@@ -24,6 +25,8 @@ class TikTokCutsRequest(BaseModel):
     source_video_path: str
     clips_count: int | None = None
     clip_seconds: int | None = None
+    clip_min_seconds: int | None = None
+    clip_max_seconds: int | None = None
     tracks_dir: str | None = None
     output_dir: str | None = None
 
@@ -77,8 +80,10 @@ def start_trigger_server(config: AppConfig) -> None:
             tracks_dir = _resolve_path(payload.tracks_dir, config.assets_tracks_dir)
             output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
 
-            clips_count = payload.clips_count or config.tiktok_clips_per_run
-            clip_seconds = payload.clip_seconds or config.tiktok_clip_seconds
+            clips_count = config.tiktok_clips_per_run if payload.clips_count is None else payload.clips_count
+            clip_seconds = config.tiktok_clip_seconds if payload.clip_seconds is None else payload.clip_seconds
+            clip_min_seconds = payload.clip_min_seconds
+            clip_max_seconds = payload.clip_max_seconds
 
             logger.info(
                 "TRIGGER: tiktok cuts requested | source=%s clips_count=%s clip_seconds=%s tracks_dir=%s output_dir=%s",
@@ -88,19 +93,32 @@ def start_trigger_server(config: AppConfig) -> None:
                 tracks_dir,
                 output_dir,
             )
+            def _on_clip_ready(item: TikTokClipResult) -> None:
+                if not config.telegram_send_tiktok:
+                    return
+                send_files_to_telegram(
+                    bot_token=config.telegram_bot_token,
+                    chat_id=config.telegram_chat_id,
+                    file_paths=[item.output_path],
+                    caption_prefix="TikTok cut ready",
+                )
+
             results = create_tiktok_cuts(
                 source_video_path=source_video_path,
                 tracks_dir=tracks_dir,
                 output_dir=output_dir,
-                clips_count=max(1, clips_count),
+                clips_count=clips_count,
                 clip_seconds=max(5, clip_seconds),
                 width=config.tiktok_width,
                 height=config.tiktok_height,
                 fps=config.fps,
                 encode_preset=config.render_preset,
                 crf=config.render_crf,
+                clip_min_seconds=max(5, clip_min_seconds) if clip_min_seconds is not None else None,
+                clip_max_seconds=max(5, clip_max_seconds) if clip_max_seconds is not None else None,
+                on_clip_ready=_on_clip_ready,
             )
-            return {
+            response_payload = {
                 "status": "ok",
                 "message": "tiktok cuts completed",
                 "clips_count": len(results),
@@ -114,6 +132,9 @@ def start_trigger_server(config: AppConfig) -> None:
                     for item in results
                 ],
             }
+            if config.telegram_send_tiktok:
+                response_payload["telegram_sent"] = True
+            return response_payload
         except Exception as exc:  # noqa: BLE001
             logger.exception("TRIGGER: tiktok cuts failed: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
