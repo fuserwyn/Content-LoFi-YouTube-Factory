@@ -127,6 +127,8 @@ def run(preferred_track: str | None = None, allow_recent_preferred: bool = False
             fps=config.fps,
             encode_preset=config.render_preset,
             crf=config.render_crf,
+            no_repeat_clips_in_single_video=config.no_repeat_clips_in_single_video,
+            allow_shorter_unique_video=config.allow_shorter_unique_video,
         )
         output_path = str(render_result.output_path)
 

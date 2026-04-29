@@ -36,6 +36,8 @@ def render_video_with_ffmpeg(
     fps: int,
     encode_preset: str = "veryfast",
     crf: int = 23,
+    no_repeat_clips_in_single_video: bool = False,
+    allow_shorter_unique_video: bool = True,
 ) -> RenderResult:
     if not clips:
         raise RuntimeError("No clips available for rendering.")
@@ -53,7 +55,16 @@ def render_video_with_ffmpeg(
         target_duration_seconds=target_duration_seconds,
         min_segment_seconds=6,
         max_segment_seconds=12,
+        avoid_clip_reuse=no_repeat_clips_in_single_video,
+        allow_shorter_output=allow_shorter_unique_video,
     )
+    planned_seconds = sum(item.duration_second for item in motion_plan)
+    if planned_seconds <= 0:
+        raise RuntimeError("Unable to build a valid render plan.")
+    if no_repeat_clips_in_single_video and not allow_shorter_unique_video and planned_seconds < target_duration_seconds:
+        raise RuntimeError(
+            f"Not enough unique clips for strict no-repeat mode: planned={planned_seconds}s target={target_duration_seconds}s"
+        )
 
     normalized_files: list[Path] = []
     LOGGER.info("RENDER: preparing %d dynamic segments", len(motion_plan))
@@ -116,18 +127,23 @@ def render_video_with_ffmpeg(
         ]
     )
 
-    _run_ffmpeg(
+    final_target_seconds = target_duration_seconds
+    final_cmd = ["ffmpeg", "-y"]
+    if not no_repeat_clips_in_single_video:
+        final_cmd.extend(["-stream_loop", "-1"])
+    else:
+        # Strict mode keeps unique visual sequence and avoids looping stitched video.
+        final_target_seconds = min(target_duration_seconds, planned_seconds)
+        LOGGER.info("RENDER: strict no-repeat mode, final_target_seconds=%ss", final_target_seconds)
+
+    final_cmd.extend(
         [
-            "ffmpeg",
-            "-y",
-            "-stream_loop",
-            "-1",
             "-i",
             str(stitched_video_path),
             "-i",
             str(track_path),
             "-t",
-            str(target_duration_seconds),
+            str(final_target_seconds),
             "-c:v",
             "libx264",
             "-preset",
@@ -142,9 +158,12 @@ def render_video_with_ffmpeg(
             "192k",
             "-shortest",
             str(output_path),
-        ],
+        ]
+    )
+    _run_ffmpeg(
+        final_cmd,
         progress_label="final render",
-        expected_duration_seconds=target_duration_seconds,
+        expected_duration_seconds=final_target_seconds,
     )
 
     return RenderResult(output_path=output_path, concat_source_path=concat_list_path)
@@ -201,6 +220,8 @@ def _build_motion_plan(
     target_duration_seconds: int,
     min_segment_seconds: int,
     max_segment_seconds: int,
+    avoid_clip_reuse: bool = False,
+    allow_shorter_output: bool = True,
 ) -> list[MotionSegment]:
     plan: list[MotionSegment] = []
     elapsed = 0
@@ -213,6 +234,8 @@ def _build_motion_plan(
 
     while elapsed < target_duration_seconds:
         if not available:
+            if avoid_clip_reuse:
+                break
             available = clips[:]
             random.shuffle(available)
             # Avoid immediate repetition when more than one clip exists.

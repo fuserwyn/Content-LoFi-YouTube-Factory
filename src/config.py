@@ -44,6 +44,8 @@ class AppConfig:
     assets_source_videos_dir: Path
     run_mode: str
     trigger_api_key: str
+    no_repeat_clips_in_single_video: bool
+    allow_shorter_unique_video: bool
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -118,4 +120,6 @@ def load_config() -> AppConfig:
         assets_source_videos_dir=assets_source_videos_dir,
         run_mode=run_mode,
         trigger_api_key=os.getenv("TRIGGER_API_KEY", "").strip(),
+        no_repeat_clips_in_single_video=_parse_bool("NO_REPEAT_CLIPS_IN_SINGLE_VIDEO", False),
+        allow_shorter_unique_video=_parse_bool("ALLOW_SHORTER_UNIQUE_VIDEO", True),
     )

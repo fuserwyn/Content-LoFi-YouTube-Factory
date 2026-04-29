@@ -79,3 +79,20 @@ def test_motion_plan_avoids_immediate_repeat_when_pool_refills() -> None:
     ids = [item.clip.source_video_id for item in plan]
     for left, right in zip(ids, ids[1:]):
         assert left != right
+
+
+def test_motion_plan_no_repeat_mode_uses_each_clip_once() -> None:
+    random.seed(13)
+    clips = [_clip(1, 40), _clip(2, 40), _clip(3, 40)]
+    plan = _build_motion_plan(
+        clips=clips,
+        target_duration_seconds=100,
+        min_segment_seconds=8,
+        max_segment_seconds=8,
+        avoid_clip_reuse=True,
+        allow_shorter_output=True,
+    )
+
+    ids = [item.clip.source_video_id for item in plan]
+    assert len(ids) == len(set(ids))  # no clip reused
+    assert len(ids) == 3
