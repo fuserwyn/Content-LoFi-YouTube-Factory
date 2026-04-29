@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from flask import Flask, jsonify, request
+from flask import Flask, request
 
 from .config import AppConfig
 from .logger import setup_logger
@@ -28,8 +28,18 @@ def start_trigger_server(config: AppConfig) -> None:
             return {"status": "busy", "message": "run already in progress"}, 409
 
         try:
-            logger.info("TRIGGER: manual run requested via webhook")
-            pipeline_run()
+            payload = request.get_json(silent=True) or {}
+            preferred_track = payload.get("track")
+            allow_recent_preferred = bool(payload.get("allow_recent_preferred", False))
+            logger.info(
+                "TRIGGER: manual run requested via webhook | track=%s allow_recent=%s",
+                preferred_track,
+                allow_recent_preferred,
+            )
+            pipeline_run(
+                preferred_track=preferred_track,
+                allow_recent_preferred=allow_recent_preferred,
+            )
             return {"status": "ok", "message": "run completed"}, 200
         finally:
             run_lock.release()

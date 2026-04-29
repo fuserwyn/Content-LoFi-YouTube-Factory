@@ -38,7 +38,7 @@ def _cleanup_temp_files(temp_clips_dir: Path, temp_renders_dir: Path, keep_final
             shutil.rmtree(path, ignore_errors=True)
 
 
-def run() -> None:
+def run(preferred_track: str | None = None, allow_recent_preferred: bool = False) -> None:
     logger = setup_logger()
     config = load_config()
     store = create_state_store(config.state_db_path, database_url=config.database_url)
@@ -93,7 +93,12 @@ def run() -> None:
             raise RuntimeError("No valid clips available from local source videos or Pexels.")
 
         logger.info("TRACK_SELECT: selecting music track")
-        selected_track = choose_track(config.assets_tracks_dir, recent_tracks)
+        selected_track = choose_track(
+            config.assets_tracks_dir,
+            recent_tracks,
+            preferred_track=preferred_track,
+            allow_recent_preferred=allow_recent_preferred,
+        )
         track_path = str(selected_track)
 
         logger.info("RENDER: composing final video with FFmpeg")
