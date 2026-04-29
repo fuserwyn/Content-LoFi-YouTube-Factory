@@ -182,6 +182,7 @@ def run(
             "planned_seconds": render_result.planned_seconds,
             "final_target_seconds": render_result.final_target_seconds,
             "looped_stitched_video": render_result.looped_stitched_video,
+            "tail_padded_seconds": render_result.tail_padded_seconds,
             "no_repeat_clips_in_single_video": config.no_repeat_clips_in_single_video,
             "allow_shorter_unique_video": config.allow_shorter_unique_video,
         }

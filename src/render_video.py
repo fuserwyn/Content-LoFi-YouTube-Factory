@@ -20,6 +20,7 @@ class RenderResult:
     planned_seconds: int
     final_target_seconds: int
     looped_stitched_video: bool
+    tail_padded_seconds: int
 
 
 @dataclass
@@ -133,10 +134,19 @@ def render_video_with_ffmpeg(
     final_target_seconds = target_duration_seconds
     final_cmd = ["ffmpeg", "-y"]
     should_loop_stitched_video = not no_repeat_clips_in_single_video
+    tail_padded_seconds = 0
     if no_repeat_clips_in_single_video:
-        # No-repeat mode never loops stitched video; resulting duration can be shorter
-        # than the track when unique source material is insufficient.
-        final_target_seconds = min(target_duration_seconds, planned_seconds)
+        # No-repeat mode never loops stitched video. If unique footage is insufficient,
+        # extend with a cloned final frame to keep the full track length.
+        if planned_seconds < target_duration_seconds:
+            tail_padded_seconds = target_duration_seconds - planned_seconds
+            LOGGER.warning(
+                "RENDER: unique footage shorter than target (planned=%ss target=%ss); "
+                "padding tail with freeze-frame for %ss",
+                planned_seconds,
+                target_duration_seconds,
+                tail_padded_seconds,
+            )
         LOGGER.info("RENDER: strict no-repeat mode, final_target_seconds=%ss", final_target_seconds)
 
     if should_loop_stitched_video:
@@ -148,6 +158,17 @@ def render_video_with_ffmpeg(
             str(stitched_video_path),
             "-i",
             str(track_path),
+        ]
+    )
+    if tail_padded_seconds > 0:
+        final_cmd.extend(
+            [
+                "-vf",
+                f"tpad=stop_mode=clone:stop_duration={tail_padded_seconds}",
+            ]
+        )
+    final_cmd.extend(
+        [
             "-t",
             str(final_target_seconds),
             "-c:v",
@@ -178,6 +199,7 @@ def render_video_with_ffmpeg(
         planned_seconds=planned_seconds,
         final_target_seconds=final_target_seconds,
         looped_stitched_video=should_loop_stitched_video,
+        tail_padded_seconds=tail_padded_seconds,
     )
 
 
