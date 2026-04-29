@@ -49,3 +49,33 @@ def test_motion_plan_segment_bounds() -> None:
     for item in plan:
         assert item.start_second >= 0
         assert item.duration_second >= 1
+
+
+def test_motion_plan_uses_unique_clips_before_repeating() -> None:
+    random.seed(11)
+    clips = [_clip(1, 30), _clip(2, 30), _clip(3, 30)]
+    plan = _build_motion_plan(
+        clips=clips,
+        target_duration_seconds=24,
+        min_segment_seconds=8,
+        max_segment_seconds=8,
+    )
+
+    ids = [item.clip.source_video_id for item in plan]
+    assert len(ids) == 3
+    assert len(set(ids)) == 3
+
+
+def test_motion_plan_avoids_immediate_repeat_when_pool_refills() -> None:
+    random.seed(5)
+    clips = [_clip(1, 40), _clip(2, 40)]
+    plan = _build_motion_plan(
+        clips=clips,
+        target_duration_seconds=32,
+        min_segment_seconds=8,
+        max_segment_seconds=8,
+    )
+
+    ids = [item.clip.source_video_id for item in plan]
+    for left, right in zip(ids, ids[1:]):
+        assert left != right

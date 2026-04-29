@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import random
+import re
 import subprocess
 
 from .fetch_assets import ClipAsset
+
+LOGGER = logging.getLogger("content_factory")
+FFMPEG_TIME_RE = re.compile(r"time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 
 
 @dataclass
@@ -51,9 +56,18 @@ def render_video_with_ffmpeg(
     )
 
     normalized_files: list[Path] = []
+    LOGGER.info("RENDER: preparing %d dynamic segments", len(motion_plan))
     for index, segment in enumerate(motion_plan):
         normalized_file = normalized_dir / f"segment_{index:03d}.mp4"
         normalized_files.append(normalized_file)
+        LOGGER.info(
+            "RENDER: segment %d/%d | clip_id=%s | start=%ss | duration=%ss",
+            index + 1,
+            len(motion_plan),
+            segment.clip.source_video_id,
+            segment.start_second,
+            segment.duration_second,
+        )
         _run_ffmpeg(
             [
                 "ffmpeg",
@@ -74,7 +88,9 @@ def render_video_with_ffmpeg(
                 "-pix_fmt",
                 "yuv420p",
                 str(normalized_file),
-            ]
+            ],
+            progress_label=f"segment {index + 1}/{len(motion_plan)}",
+            expected_duration_seconds=segment.duration_second,
         )
 
     with concat_list_path.open("w", encoding="utf-8") as file:
@@ -126,16 +142,58 @@ def render_video_with_ffmpeg(
             "192k",
             "-shortest",
             str(output_path),
-        ]
+        ],
+        progress_label="final render",
+        expected_duration_seconds=target_duration_seconds,
     )
 
     return RenderResult(output_path=output_path, concat_source_path=concat_list_path)
 
 
-def _run_ffmpeg(command: list[str]) -> None:
-    proc = subprocess.run(command, check=False, capture_output=True, text=True)
+def _run_ffmpeg(
+    command: list[str],
+    progress_label: str = "",
+    expected_duration_seconds: int = 0,
+) -> None:
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    last_percent_bucket = -1
+    stderr_lines: list[str] = []
+    assert proc.stderr is not None
+    for line in proc.stderr:
+        stderr_lines.append(line)
+        if expected_duration_seconds <= 0:
+            continue
+        parsed_seconds = _extract_ffmpeg_time_seconds(line)
+        if parsed_seconds is None:
+            continue
+        percent = min(100, int((parsed_seconds / expected_duration_seconds) * 100))
+        bucket = percent // 10
+        if bucket > last_percent_bucket:
+            last_percent_bucket = bucket
+            LOGGER.info("RENDER: %s progress %d%%", progress_label or "ffmpeg", bucket * 10)
+
+    proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg command failed: {' '.join(command)}\n{proc.stderr}")
+        raise RuntimeError(f"FFmpeg command failed: {' '.join(command)}\n{''.join(stderr_lines)}")
+
+
+def _extract_ffmpeg_time_seconds(line: str) -> float | None:
+    match = FFMPEG_TIME_RE.search(line)
+    if not match:
+        return None
+    return _hhmmss_to_seconds(match.group(1))
+
+
+def _hhmmss_to_seconds(value: str) -> float:
+    hh, mm, ss = value.split(":")
+    return int(hh) * 3600 + int(mm) * 60 + float(ss)
 
 
 def _build_motion_plan(
@@ -146,13 +204,22 @@ def _build_motion_plan(
 ) -> list[MotionSegment]:
     plan: list[MotionSegment] = []
     elapsed = 0
-    clip_index = 0
     if not clips:
         return plan
 
+    available = clips[:]
+    random.shuffle(available)
+    prev_clip_id: int | None = None
+
     while elapsed < target_duration_seconds:
-        clip = clips[clip_index % len(clips)]
-        clip_index += 1
+        if not available:
+            available = clips[:]
+            random.shuffle(available)
+            # Avoid immediate repetition when more than one clip exists.
+            if len(available) > 1 and prev_clip_id is not None and available[0].source_video_id == prev_clip_id:
+                available.append(available.pop(0))
+
+        clip = available.pop(0)
 
         max_available = max(1, clip.duration - 1)
         segment_duration = min(random.randint(min_segment_seconds, max_segment_seconds), max_available)
@@ -171,5 +238,6 @@ def _build_motion_plan(
             )
         )
         elapsed += segment_duration
+        prev_clip_id = clip.source_video_id
 
     return plan
