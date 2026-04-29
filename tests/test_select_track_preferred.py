@@ -50,3 +50,19 @@ def test_choose_track_prefers_by_absolute_path(tmp_path: Path) -> None:
     )
     assert picked == a
 
+
+def test_choose_track_can_use_preferred_when_tracks_dir_empty(tmp_path: Path) -> None:
+    # tracks_dir is intentionally empty, but preferred_track points to an existing file elsewhere.
+    tracks_dir = tmp_path / "empty"
+    tracks_dir.mkdir()
+
+    actual = tmp_path / "actual.mp3"
+    _make_track(actual)
+
+    picked = choose_track(
+        tracks_dir=tracks_dir,
+        recently_used_tracks=set(),
+        preferred_track=str(actual),
+    )
+    assert picked == actual
+
