@@ -46,6 +46,7 @@ class AppConfig:
     trigger_api_key: str
     no_repeat_clips_in_single_video: bool
     allow_shorter_unique_video: bool
+    match_video_duration_to_track: bool
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -122,4 +123,5 @@ def load_config() -> AppConfig:
         trigger_api_key=os.getenv("TRIGGER_API_KEY", "").strip(),
         no_repeat_clips_in_single_video=_parse_bool("NO_REPEAT_CLIPS_IN_SINGLE_VIDEO", False),
         allow_shorter_unique_video=_parse_bool("ALLOW_SHORTER_UNIQUE_VIDEO", True),
+        match_video_duration_to_track=_parse_bool("MATCH_VIDEO_DURATION_TO_TRACK", False),
     )

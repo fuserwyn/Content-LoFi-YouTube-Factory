@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import shutil
+import subprocess
 import traceback
 
 from .config import load_config
@@ -38,7 +39,37 @@ def _cleanup_temp_files(temp_clips_dir: Path, temp_renders_dir: Path, keep_final
             shutil.rmtree(path, ignore_errors=True)
 
 
-def run(preferred_track: str | None = None, allow_recent_preferred: bool = False) -> None:
+def _probe_audio_duration_seconds(audio_path: Path) -> int | None:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(audio_path),
+    ]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = proc.stdout.strip()
+    if not raw:
+        return None
+    try:
+        return max(1, int(float(raw)))
+    except ValueError:
+        return None
+
+
+def run(
+    preferred_track: str | None = None,
+    allow_recent_preferred: bool = False,
+    content_tags_override: list[str] | None = None,
+) -> None:
     logger = setup_logger()
     config = load_config()
     store = create_state_store(config.state_db_path, database_url=config.database_url)
@@ -52,6 +83,10 @@ def run(preferred_track: str | None = None, allow_recent_preferred: bool = False
         "started_at": now.isoformat(),
         "status": "started",
     }
+    effective_tags = [t.strip() for t in (content_tags_override or config.content_tags) if t and t.strip()]
+    if not effective_tags:
+        effective_tags = config.content_tags
+    report_payload["content_tags"] = effective_tags
 
     track_path = ""
     output_path = ""
@@ -94,7 +129,7 @@ def run(preferred_track: str | None = None, allow_recent_preferred: bool = False
             logger.info("FETCH: requesting clips from Pexels")
             clips = fetch_and_download_clips(
                 api_key=config.pexels_api_key,
-                tags=config.content_tags,
+                tags=effective_tags,
                 output_dir=config.temp_clips_dir,
                 max_clips=config.max_clips_per_run,
                 min_clip_seconds=config.min_clip_seconds,
@@ -115,13 +150,25 @@ def run(preferred_track: str | None = None, allow_recent_preferred: bool = False
             allow_recent_preferred=allow_recent_preferred,
         )
         track_path = str(selected_track)
+        target_duration_seconds = config.target_duration_min * 60
+        if config.match_video_duration_to_track:
+            track_duration = _probe_audio_duration_seconds(selected_track)
+            if track_duration is not None:
+                target_duration_seconds = track_duration
+                logger.info("RENDER: matched duration to track length=%ss", track_duration)
+            else:
+                logger.warning(
+                    "RENDER: failed to probe track duration, fallback to TARGET_DURATION_MIN=%s",
+                    config.target_duration_min,
+                )
+        report_payload["target_duration_seconds"] = target_duration_seconds
 
         logger.info("RENDER: composing final video with FFmpeg")
         render_result = render_video_with_ffmpeg(
             clips=clips,
             track_path=selected_track,
             output_dir=config.temp_renders_dir,
-            target_duration_seconds=config.target_duration_min * 60,
+            target_duration_seconds=target_duration_seconds,
             width=config.target_width,
             height=config.target_height,
             fps=config.fps,
@@ -133,7 +180,7 @@ def run(preferred_track: str | None = None, allow_recent_preferred: bool = False
         output_path = str(render_result.output_path)
 
         logger.info("META: generating title/description/tags")
-        meta = generate_metadata(selected_track, config.content_tags)
+        meta = generate_metadata(selected_track, effective_tags)
         report_payload["metadata"] = asdict(meta)
 
         if config.upload_enabled:

@@ -14,6 +14,8 @@ from .main import run as pipeline_run
 class RunRequest(BaseModel):
     track: str | None = None
     allow_recent_preferred: bool = False
+    tags: list[str] | None = None
+    theme: str | None = None
 
 
 def start_trigger_server(config: AppConfig) -> None:
@@ -36,13 +38,16 @@ def start_trigger_server(config: AppConfig) -> None:
 
         try:
             logger.info(
-                "TRIGGER: manual run requested via webhook | track=%s allow_recent=%s",
+                "TRIGGER: manual run requested via webhook | track=%s allow_recent=%s tags=%s theme=%s",
                 payload.track,
                 payload.allow_recent_preferred,
+                payload.tags,
+                payload.theme,
             )
             pipeline_run(
                 preferred_track=payload.track,
                 allow_recent_preferred=payload.allow_recent_preferred,
+                content_tags_override=payload.tags,
             )
             return {"status": "ok", "message": "run completed"}
         finally:

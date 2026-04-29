@@ -1,0 +1,96 @@
+{
+  "name": "Content Factory - 30 Day Plan",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "custom",
+              "cronExpression": "0 17 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger-node",
+      "name": "Daily at 20:00 Kyiv",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        220,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const plan = [\n  { day: 1, track: 'track-01.mp3', tags: ['nature','forest','morning'], theme: 'Forest Morning' },\n  { day: 2, track: 'track-02.mp3', tags: ['ocean','sunset','calm'], theme: 'Ocean Sunset' },\n  { day: 3, track: 'track-03.mp3', tags: ['rain','city','night'], theme: 'Rainy City Night' },\n  { day: 4, track: 'track-04.mp3', tags: ['mountains','clouds','ambient'], theme: 'Cloudy Mountains' },\n  { day: 5, track: 'track-05.mp3', tags: ['surf','beach','golden hour'], theme: 'Surf Golden Hour' },\n  { day: 6, track: 'track-06.mp3', tags: ['river','green','chill'], theme: 'Riverside Chill' },\n  { day: 7, track: 'track-07.mp3', tags: ['sea','waves','focus'], theme: 'Sea Focus' },\n  { day: 8, track: 'track-08.mp3', tags: ['forest','rain','calm'], theme: 'Forest Rain' },\n  { day: 9, track: 'track-09.mp3', tags: ['sunrise','mountain','study'], theme: 'Sunrise Study' },\n  { day: 10, track: 'track-10.mp3', tags: ['ocean','drone','ambient'], theme: 'Ocean Drift' },\n  { day: 11, track: 'track-11.mp3', tags: ['jungle','mist','deep'], theme: 'Misty Jungle' },\n  { day: 12, track: 'track-12.mp3', tags: ['city','night','lights'], theme: 'Night Lights' },\n  { day: 13, track: 'track-13.mp3', tags: ['waterfall','nature','relax'], theme: 'Waterfall Relax' },\n  { day: 14, track: 'track-14.mp3', tags: ['beach','sun','chill'], theme: 'Sunny Beach Chill' },\n  { day: 15, track: 'track-15.mp3', tags: ['forest','path','focus'], theme: 'Forest Path Focus' },\n  { day: 16, track: 'track-16.mp3', tags: ['surf','ocean','calm'], theme: 'Calm Surf' },\n  { day: 17, track: 'track-17.mp3', tags: ['snow','mountain','ambient'], theme: 'Snowy Ambient' },\n  { day: 18, track: 'track-18.mp3', tags: ['rain','window','sleep'], theme: 'Rain Window Sleep' },\n  { day: 19, track: 'track-19.mp3', tags: ['lake','sunset','meditation'], theme: 'Lake Meditation' },\n  { day: 20, track: 'track-20.mp3', tags: ['island','sea','vibes'], theme: 'Island Vibes' },\n  { day: 21, track: 'track-21.mp3', tags: ['forest','wind','deep work'], theme: 'Forest Deep Work' },\n  { day: 22, track: 'track-22.mp3', tags: ['ocean','moonlight','night'], theme: 'Moonlight Ocean' },\n  { day: 23, track: 'track-23.mp3', tags: ['city','rain','late night'], theme: 'Late Night City' },\n  { day: 24, track: 'track-24.mp3', tags: ['mountain','sunset','focus'], theme: 'Mountain Focus' },\n  { day: 25, track: 'track-25.mp3', tags: ['sea','rocks','calm'], theme: 'Sea Rocks Calm' },\n  { day: 26, track: 'track-26.mp3', tags: ['river','autumn','study'], theme: 'Autumn River Study' },\n  { day: 27, track: 'track-27.mp3', tags: ['forest','night','sleep'], theme: 'Night Forest Sleep' },\n  { day: 28, track: 'track-28.mp3', tags: ['beach','dawn','ambient'], theme: 'Beach Dawn Ambient' },\n  { day: 29, track: 'track-29.mp3', tags: ['ocean','storm','dark'], theme: 'Ocean Storm Dark' },\n  { day: 30, track: 'track-30.mp3', tags: ['nature','mixed','lofi'], theme: 'Nature Lofi Mixed' }\n];\n\nconst dayIndex = (new Date().getUTCDate() - 1) % plan.length;\nconst item = plan[dayIndex];\nreturn [{ json: item }];"
+      },
+      "id": "pick-plan-item",
+      "name": "Pick Day Plan Item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_RUN_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"track\": $json.track, \"allow_recent_preferred\": true, \"tags\": $json.tags, \"theme\": $json.theme } }}"
+      },
+      "id": "run-content-factory",
+      "name": "Run Content Factory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 20:00 Kyiv": {
+      "main": [
+        [
+          {
+            "node": "Pick Day Plan Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Day Plan Item": {
+      "main": [
+        [
+          {
+            "node": "Run Content Factory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
