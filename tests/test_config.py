@@ -39,3 +39,14 @@ def test_load_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.content_tags == ["nature", "surf"]
     assert config.upload_enabled is False
     assert os.path.isdir(config.assets_tracks_dir)
+    assert os.path.isdir(config.assets_source_videos_dir)
+    assert config.run_mode == "oneshot"
+
+
+def test_load_config_rejects_invalid_run_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in REQUIRED_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("RUN_MODE", "invalid")
+
+    with pytest.raises(ValueError):
+        load_config()

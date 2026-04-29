@@ -39,6 +39,11 @@ class AppConfig:
     keep_final_output: bool
     render_preset: str
     render_crf: int
+    use_local_videos_only: bool
+    local_videos_fallback_to_pexels: bool
+    assets_source_videos_dir: Path
+    run_mode: str
+    trigger_api_key: str
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -60,15 +65,20 @@ def load_config() -> AppConfig:
     data_dir = project_root / "data"
     runs_dir = data_dir / "runs"
     assets_tracks_dir = project_root / "assets" / "tracks"
+    assets_source_videos_dir = project_root / "assets" / "source_videos"
     temp_clips_dir = project_root / "temp" / "clips"
     temp_renders_dir = project_root / "temp" / "renders"
     state_db_path = data_dir / "state.db"
 
-    for path in [data_dir, runs_dir, assets_tracks_dir, temp_clips_dir, temp_renders_dir]:
+    for path in [data_dir, runs_dir, assets_tracks_dir, assets_source_videos_dir, temp_clips_dir, temp_renders_dir]:
         path.mkdir(parents=True, exist_ok=True)
 
     tags_raw = os.getenv("CONTENT_TAGS", "nature,surf,ocean,sunset")
     tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+
+    run_mode = os.getenv("RUN_MODE", "oneshot").strip().lower() or "oneshot"
+    if run_mode not in {"oneshot", "webhook"}:
+        raise ValueError("RUN_MODE must be either 'oneshot' or 'webhook'")
 
     return AppConfig(
         pexels_api_key=_require_env("PEXELS_API_KEY"),
@@ -103,4 +113,9 @@ def load_config() -> AppConfig:
         keep_final_output=_parse_bool("KEEP_FINAL_OUTPUT", False),
         render_preset=os.getenv("RENDER_PRESET", "veryfast").strip() or "veryfast",
         render_crf=int(os.getenv("RENDER_CRF", "23")),
+        use_local_videos_only=_parse_bool("USE_LOCAL_VIDEOS_ONLY", False),
+        local_videos_fallback_to_pexels=_parse_bool("LOCAL_VIDEOS_FALLBACK_TO_PEXELS", True),
+        assets_source_videos_dir=assets_source_videos_dir,
+        run_mode=run_mode,
+        trigger_api_key=os.getenv("TRIGGER_API_KEY", "").strip(),
     )

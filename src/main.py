@@ -8,7 +8,7 @@ import shutil
 import traceback
 
 from .config import load_config
-from .fetch_assets import fetch_and_download_clips
+from .fetch_assets import fetch_and_download_clips, load_local_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
 from .notify_n8n import send_run_notification
@@ -61,21 +61,36 @@ def run() -> None:
         recent_tracks = set(store.recent_tracks(config.max_recent_track_lookback))
         recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
 
-        logger.info("FETCH: requesting clips from Pexels")
-        clips = fetch_and_download_clips(
-            api_key=config.pexels_api_key,
-            tags=config.content_tags,
-            output_dir=config.temp_clips_dir,
-            max_clips=config.max_clips_per_run,
-            min_clip_seconds=config.min_clip_seconds,
-            min_width=config.target_width,
-            min_height=config.target_height,
-            recently_used_clip_urls=recent_clips,
-            per_page=config.pexels_per_page,
-            pages_per_tag=config.pexels_pages_per_tag,
-        )
+        clips = []
+        if config.use_local_videos_only:
+            logger.info("FETCH: loading clips from local source videos")
+            clips = load_local_clips(
+                source_dir=config.assets_source_videos_dir,
+                max_clips=config.max_clips_per_run,
+                min_clip_seconds=config.min_clip_seconds,
+                min_width=config.target_width,
+                min_height=config.target_height,
+                recently_used_clip_urls=recent_clips,
+            )
+            if not clips and config.local_videos_fallback_to_pexels:
+                logger.info("FETCH: local clips unavailable, falling back to Pexels")
+
+        if (not clips) and (not config.use_local_videos_only or config.local_videos_fallback_to_pexels):
+            logger.info("FETCH: requesting clips from Pexels")
+            clips = fetch_and_download_clips(
+                api_key=config.pexels_api_key,
+                tags=config.content_tags,
+                output_dir=config.temp_clips_dir,
+                max_clips=config.max_clips_per_run,
+                min_clip_seconds=config.min_clip_seconds,
+                min_width=config.target_width,
+                min_height=config.target_height,
+                recently_used_clip_urls=recent_clips,
+                per_page=config.pexels_per_page,
+                pages_per_tag=config.pexels_pages_per_tag,
+            )
         if not clips:
-            raise RuntimeError("No valid clips fetched from Pexels.")
+            raise RuntimeError("No valid clips available from local source videos or Pexels.")
 
         logger.info("TRACK_SELECT: selecting music track")
         selected_track = choose_track(config.assets_tracks_dir, recent_tracks)

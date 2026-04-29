@@ -5,9 +5,11 @@ from pathlib import Path
 import random
 import time
 import requests
+import subprocess
 
 
 PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
+LOCAL_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 
 
 @dataclass
@@ -128,3 +130,87 @@ def _request_with_retry(headers: dict, params: dict, max_attempts: int = 3) -> d
             delay *= 2
 
     return {}
+
+
+def load_local_clips(
+    source_dir: Path,
+    max_clips: int,
+    min_clip_seconds: int,
+    min_width: int,
+    min_height: int,
+    recently_used_clip_urls: set[str],
+) -> list[ClipAsset]:
+    selected: list[ClipAsset] = []
+    files = [p for p in source_dir.glob("*") if p.is_file() and p.suffix.lower() in LOCAL_VIDEO_EXTENSIONS]
+    random.shuffle(files)
+
+    for index, path in enumerate(files):
+        if len(selected) >= max_clips:
+            break
+
+        source_url = path.as_posix()
+        if source_url in recently_used_clip_urls:
+            continue
+
+        metadata = _probe_video(path)
+        if not metadata:
+            continue
+        if metadata["duration"] < min_clip_seconds:
+            continue
+        if metadata["width"] < min_width or metadata["height"] < min_height:
+            continue
+        if metadata["width"] < metadata["height"]:
+            continue
+
+        selected.append(
+            ClipAsset(
+                source_video_id=index + 1,
+                source_url=source_url,
+                author_name="local",
+                download_url=source_url,
+                local_path=path,
+                width=metadata["width"],
+                height=metadata["height"],
+                duration=metadata["duration"],
+                license="local-owner",
+            )
+        )
+
+    return selected
+
+
+def _probe_video(path: Path) -> dict | None:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height:format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=0",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    if proc.returncode != 0:
+        return None
+
+    result: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        result[key.strip()] = value.strip()
+
+    try:
+        return {
+            "width": int(float(result.get("width", "0"))),
+            "height": int(float(result.get("height", "0"))),
+            "duration": int(float(result.get("duration", "0"))),
+        }
+    except ValueError:
+        return None

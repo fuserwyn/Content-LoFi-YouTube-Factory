@@ -4,7 +4,7 @@
     "builder": "DOCKERFILE"
   },
   "deploy": {
-    "startCommand": "python -m src.main",
+    "startCommand": "python -m src.entrypoint",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }
