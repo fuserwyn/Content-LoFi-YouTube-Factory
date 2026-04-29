@@ -4,4 +4,5 @@ google-api-python-client==2.169.0
 google-auth==2.40.1
 pytest==8.3.5
 psycopg[binary]==3.2.9
-flask==3.0.3
+fastapi==0.115.12
+uvicorn==0.30.6
