@@ -178,6 +178,13 @@ def run(
             allow_shorter_unique_video=config.allow_shorter_unique_video,
         )
         output_path = str(render_result.output_path)
+        report_payload["render"] = {
+            "planned_seconds": render_result.planned_seconds,
+            "final_target_seconds": render_result.final_target_seconds,
+            "looped_stitched_video": render_result.looped_stitched_video,
+            "no_repeat_clips_in_single_video": config.no_repeat_clips_in_single_video,
+            "allow_shorter_unique_video": config.allow_shorter_unique_video,
+        }
 
         logger.info("META: generating title/description/tags")
         meta = generate_metadata(selected_track, effective_tags)

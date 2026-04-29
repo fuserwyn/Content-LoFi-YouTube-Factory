@@ -17,6 +17,9 @@ FFMPEG_TIME_RE = re.compile(r"time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 class RenderResult:
     output_path: Path
     concat_source_path: Path
+    planned_seconds: int
+    final_target_seconds: int
+    looped_stitched_video: bool
 
 
 @dataclass
@@ -130,17 +133,9 @@ def render_video_with_ffmpeg(
     final_target_seconds = target_duration_seconds
     final_cmd = ["ffmpeg", "-y"]
     should_loop_stitched_video = not no_repeat_clips_in_single_video
-    if no_repeat_clips_in_single_video and allow_shorter_unique_video and planned_seconds < target_duration_seconds:
-        # Prefer target duration over strict uniqueness when unique material is insufficient.
-        should_loop_stitched_video = True
-        LOGGER.warning(
-            "RENDER: not enough unique footage for target=%ss (planned=%ss); "
-            "looping stitched sequence to reach full duration",
-            target_duration_seconds,
-            planned_seconds,
-        )
-    elif no_repeat_clips_in_single_video:
-        # Strict mode keeps unique visual sequence and avoids looping stitched video.
+    if no_repeat_clips_in_single_video:
+        # No-repeat mode never loops stitched video; resulting duration can be shorter
+        # than the track when unique source material is insufficient.
         final_target_seconds = min(target_duration_seconds, planned_seconds)
         LOGGER.info("RENDER: strict no-repeat mode, final_target_seconds=%ss", final_target_seconds)
 
@@ -177,7 +172,13 @@ def render_video_with_ffmpeg(
         expected_duration_seconds=final_target_seconds,
     )
 
-    return RenderResult(output_path=output_path, concat_source_path=concat_list_path)
+    return RenderResult(
+        output_path=output_path,
+        concat_source_path=concat_list_path,
+        planned_seconds=planned_seconds,
+        final_target_seconds=final_target_seconds,
+        looped_stitched_video=should_loop_stitched_video,
+    )
 
 
 def _run_ffmpeg(
@@ -234,6 +235,15 @@ def _build_motion_plan(
     avoid_clip_reuse: bool = False,
     allow_shorter_output: bool = True,
 ) -> list[MotionSegment]:
+    if avoid_clip_reuse:
+        return _build_unique_motion_plan(
+            clips=clips,
+            target_duration_seconds=target_duration_seconds,
+            min_segment_seconds=min_segment_seconds,
+            max_segment_seconds=max_segment_seconds,
+            allow_shorter_output=allow_shorter_output,
+        )
+
     plan: list[MotionSegment] = []
     elapsed = 0
     if not clips:
@@ -273,5 +283,71 @@ def _build_motion_plan(
         )
         elapsed += segment_duration
         prev_clip_id = clip.source_video_id
+
+    return plan
+
+
+def _build_unique_motion_plan(
+    clips: list[ClipAsset],
+    target_duration_seconds: int,
+    min_segment_seconds: int,
+    max_segment_seconds: int,
+    allow_shorter_output: bool,
+) -> list[MotionSegment]:
+    # Build non-overlapping segments per clip, then shuffle to avoid visible sequencing.
+    unique_pool: list[MotionSegment] = []
+    for clip in clips:
+        usable_seconds = max(1, clip.duration - 1)
+        start_second = 0
+        while start_second < usable_seconds:
+            remaining_in_clip = usable_seconds - start_second
+            if remaining_in_clip < min_segment_seconds and start_second > 0:
+                break
+            segment_duration = min(max_segment_seconds, remaining_in_clip)
+            unique_pool.append(
+                MotionSegment(
+                    clip=clip,
+                    start_second=start_second,
+                    duration_second=segment_duration,
+                )
+            )
+            start_second += segment_duration
+
+    if not unique_pool:
+        return []
+
+    random.shuffle(unique_pool)
+
+    plan: list[MotionSegment] = []
+    elapsed = 0
+    prev_clip_id: int | None = None
+    pool = unique_pool[:]
+
+    while elapsed < target_duration_seconds and pool:
+        picked_index = 0
+        if prev_clip_id is not None:
+            for i, candidate in enumerate(pool):
+                if candidate.clip.source_video_id != prev_clip_id:
+                    picked_index = i
+                    break
+
+        segment = pool.pop(picked_index)
+        remaining_target = target_duration_seconds - elapsed
+        segment_duration = min(segment.duration_second, remaining_target)
+        if segment_duration <= 0:
+            break
+
+        plan.append(
+            MotionSegment(
+                clip=segment.clip,
+                start_second=segment.start_second,
+                duration_second=segment_duration,
+            )
+        )
+        elapsed += segment_duration
+        prev_clip_id = segment.clip.source_video_id
+
+    if not allow_shorter_output and elapsed < target_duration_seconds:
+        return []
 
     return plan
