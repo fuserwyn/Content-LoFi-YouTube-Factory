@@ -1,0 +1,120 @@
+{
+  "name": "Content Factory - TikTok Cuts Manual",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "source-video-path",
+              "name": "source_video_path",
+              "value": "/storage/videos/lofi_long.mp4",
+              "type": "string"
+            },
+            {
+              "id": "clips-count",
+              "name": "clips_count",
+              "value": 4,
+              "type": "number"
+            },
+            {
+              "id": "clip-seconds",
+              "name": "clip_seconds",
+              "value": 30,
+              "type": "number"
+            },
+            {
+              "id": "tracks-dir",
+              "name": "tracks_dir",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "output-dir",
+              "name": "output_dir",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-payload-node",
+      "name": "Set TikTok Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_TIKTOK_CUTS_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "http-tiktok-cuts-node",
+      "name": "Run TikTok Cuts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set TikTok Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set TikTok Payload": {
+      "main": [
+        [
+          {
+            "node": "Run TikTok Cuts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
