@@ -129,12 +129,23 @@ def render_video_with_ffmpeg(
 
     final_target_seconds = target_duration_seconds
     final_cmd = ["ffmpeg", "-y"]
-    if not no_repeat_clips_in_single_video:
-        final_cmd.extend(["-stream_loop", "-1"])
-    else:
+    should_loop_stitched_video = not no_repeat_clips_in_single_video
+    if no_repeat_clips_in_single_video and allow_shorter_unique_video and planned_seconds < target_duration_seconds:
+        # Prefer target duration over strict uniqueness when unique material is insufficient.
+        should_loop_stitched_video = True
+        LOGGER.warning(
+            "RENDER: not enough unique footage for target=%ss (planned=%ss); "
+            "looping stitched sequence to reach full duration",
+            target_duration_seconds,
+            planned_seconds,
+        )
+    elif no_repeat_clips_in_single_video:
         # Strict mode keeps unique visual sequence and avoids looping stitched video.
         final_target_seconds = min(target_duration_seconds, planned_seconds)
         LOGGER.info("RENDER: strict no-repeat mode, final_target_seconds=%ss", final_target_seconds)
+
+    if should_loop_stitched_video:
+        final_cmd.extend(["-stream_loop", "-1"])
 
     final_cmd.extend(
         [
