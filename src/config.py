@@ -47,6 +47,12 @@ class AppConfig:
     no_repeat_clips_in_single_video: bool
     allow_shorter_unique_video: bool
     match_video_duration_to_track: bool
+    tiktok_cuts_enabled: bool
+    tiktok_clips_per_run: int
+    tiktok_clip_seconds: int
+    tiktok_width: int
+    tiktok_height: int
+    tiktok_output_dir: Path
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -71,9 +77,18 @@ def load_config() -> AppConfig:
     assets_source_videos_dir = project_root / "assets" / "source_videos"
     temp_clips_dir = project_root / "temp" / "clips"
     temp_renders_dir = project_root / "temp" / "renders"
+    tiktok_output_dir = data_dir / "tiktok"
     state_db_path = data_dir / "state.db"
 
-    for path in [data_dir, runs_dir, assets_tracks_dir, assets_source_videos_dir, temp_clips_dir, temp_renders_dir]:
+    for path in [
+        data_dir,
+        runs_dir,
+        assets_tracks_dir,
+        assets_source_videos_dir,
+        temp_clips_dir,
+        temp_renders_dir,
+        tiktok_output_dir,
+    ]:
         path.mkdir(parents=True, exist_ok=True)
 
     tags_raw = os.getenv("CONTENT_TAGS", "nature,surf,ocean,sunset")
@@ -82,6 +97,9 @@ def load_config() -> AppConfig:
     run_mode = os.getenv("RUN_MODE", "oneshot").strip().lower() or "oneshot"
     if run_mode not in {"oneshot", "webhook"}:
         raise ValueError("RUN_MODE must be either 'oneshot' or 'webhook'")
+
+    resolved_tiktok_output_dir = Path(os.getenv("TIKTOK_OUTPUT_DIR", str(tiktok_output_dir)))
+    resolved_tiktok_output_dir.mkdir(parents=True, exist_ok=True)
 
     return AppConfig(
         pexels_api_key=_require_env("PEXELS_API_KEY"),
@@ -124,4 +142,10 @@ def load_config() -> AppConfig:
         no_repeat_clips_in_single_video=_parse_bool("NO_REPEAT_CLIPS_IN_SINGLE_VIDEO", False),
         allow_shorter_unique_video=_parse_bool("ALLOW_SHORTER_UNIQUE_VIDEO", True),
         match_video_duration_to_track=_parse_bool("MATCH_VIDEO_DURATION_TO_TRACK", False),
+        tiktok_cuts_enabled=_parse_bool("TIKTOK_CUTS_ENABLED", False),
+        tiktok_clips_per_run=max(1, int(os.getenv("TIKTOK_CLIPS_PER_RUN", "3"))),
+        tiktok_clip_seconds=max(5, int(os.getenv("TIKTOK_CLIP_SECONDS", "30"))),
+        tiktok_width=max(360, int(os.getenv("TIKTOK_WIDTH", "1080"))),
+        tiktok_height=max(640, int(os.getenv("TIKTOK_HEIGHT", "1920"))),
+        tiktok_output_dir=resolved_tiktok_output_dir,
     )

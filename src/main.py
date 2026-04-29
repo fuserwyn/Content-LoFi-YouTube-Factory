@@ -16,6 +16,7 @@ from .notify_n8n import send_run_notification
 from .render_video import render_video_with_ffmpeg
 from .select_track import choose_track
 from .state_store import RunRecord, create_state_store
+from .tiktok_cuts import create_tiktok_cuts
 from .upload_youtube import upload_video
 
 
@@ -186,6 +187,38 @@ def run(
             "no_repeat_clips_in_single_video": config.no_repeat_clips_in_single_video,
             "allow_shorter_unique_video": config.allow_shorter_unique_video,
         }
+
+        if config.tiktok_cuts_enabled:
+            logger.info("TIKTOK: creating short clips from rendered video")
+            tiktok_results = create_tiktok_cuts(
+                source_video_path=render_result.output_path,
+                tracks_dir=config.assets_tracks_dir,
+                output_dir=config.tiktok_output_dir,
+                clips_count=config.tiktok_clips_per_run,
+                clip_seconds=config.tiktok_clip_seconds,
+                width=config.tiktok_width,
+                height=config.tiktok_height,
+                fps=config.fps,
+                encode_preset=config.render_preset,
+                crf=config.render_crf,
+            )
+            report_payload["tiktok"] = {
+                "enabled": True,
+                "clips_count": len(tiktok_results),
+                "clip_seconds": config.tiktok_clip_seconds,
+                "output_dir": str(config.tiktok_output_dir),
+                "clips": [
+                    {
+                        "path": str(item.output_path),
+                        "track_path": str(item.track_path),
+                        "start_second": item.start_second,
+                        "duration_second": item.duration_second,
+                    }
+                    for item in tiktok_results
+                ],
+            }
+        else:
+            report_payload["tiktok"] = {"enabled": False}
 
         logger.info("META: generating title/description/tags")
         meta = generate_metadata(selected_track, effective_tags)
