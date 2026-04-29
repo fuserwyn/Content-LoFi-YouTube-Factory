@@ -14,9 +14,22 @@ def choose_track(
     preferred_track: str | None = None,
     allow_recent_preferred: bool = False,
 ) -> Path:
+    # Always log a quick directory snapshot; helps debug volume mounting issues.
+    try:
+        any_files = [p.as_posix() for p in tracks_dir.rglob("*") if p.is_file()]
+        LOGGER.info(
+            "TRACK_SELECT: dir snapshot tracks_dir=%s file_count=%d sample=%s",
+            tracks_dir,
+            len(any_files),
+            any_files[:5],
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("TRACK_SELECT: failed to snapshot tracks_dir: %s", exc)
+
+    # Use rglob to support volumes where tracks are stored in subfolders.
     all_tracks = [
         path
-        for path in tracks_dir.glob("*")
+        for path in tracks_dir.rglob("*")
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
 
@@ -37,8 +50,12 @@ def choose_track(
     pool = preferred or all_tracks
     if not pool:
         # Help diagnose volume mount issues: show what's actually present.
-        raw_entries = [p.name for p in tracks_dir.glob("*") if p.is_file()]
-        LOGGER.error("TRACK_SELECT: no supported tracks found. tracks_dir=%s entries=%s", tracks_dir, raw_entries)
+        raw_entries = [p.as_posix() for p in tracks_dir.rglob("*") if p.is_file()][:50]
+        LOGGER.error(
+            "TRACK_SELECT: no supported tracks found. tracks_dir=%s first_entries=%s",
+            tracks_dir,
+            raw_entries,
+        )
         raise RuntimeError("No tracks found in assets/tracks")
     LOGGER.info(
         "TRACK_SELECT: tracks_dir=%s total=%d preferred=%d recent_lookback=%d",
