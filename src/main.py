@@ -61,6 +61,21 @@ def run(preferred_track: str | None = None, allow_recent_preferred: bool = False
         recent_tracks = set(store.recent_tracks(config.max_recent_track_lookback))
         recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
 
+        # Debug volume mount: helps verify container can "see" tracks.
+        try:
+            track_files = [p.as_posix() for p in config.assets_tracks_dir.rglob("*") if p.is_file()]
+            logger.info(
+                "TRACK_DEBUG: assets/tracks visible files count=%d sample=%s",
+                len(track_files),
+                track_files[:5],
+            )
+            report_payload["track_debug"] = {
+                "count": len(track_files),
+                "sample": track_files[:5],
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TRACK_DEBUG: failed to snapshot tracks_dir: %s", exc)
+
         clips = []
         if config.use_local_videos_only:
             logger.info("FETCH: loading clips from local source videos")
