@@ -76,8 +76,8 @@ def start_trigger_server(config: AppConfig) -> None:
             raise HTTPException(status_code=409, detail="run already in progress")
 
         try:
-            source_video_path = _resolve_path(payload.source_video_path, config.data_dir)
-            tracks_dir = _resolve_path(payload.tracks_dir, config.assets_tracks_dir)
+            source_video_path = _resolve_source_video_path(payload.source_video_path, config)
+            tracks_dir = _resolve_tracks_dir(payload.tracks_dir, config)
             output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
 
             clips_count = config.tiktok_clips_per_run if payload.clips_count is None else payload.clips_count
@@ -153,3 +153,49 @@ def _resolve_path(raw: str | None, default_path: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return (fallback / candidate).resolve()
+
+
+def _resolve_source_video_path(raw: str, config: AppConfig) -> Path:
+    requested = Path(raw.strip())
+    search_dirs = [
+        config.assets_source_videos_dir,
+        Path("/assets/source_videos"),
+        Path("/storage/videos"),
+        config.data_dir / "videos",
+    ]
+
+    # 1) If absolute and exists, use as-is.
+    if requested.is_absolute() and requested.exists():
+        return requested
+
+    # 2) Try exact relative path under known directories.
+    if not requested.is_absolute():
+        for base in search_dirs:
+            candidate = (base / requested).resolve()
+            if candidate.exists():
+                return candidate
+
+    # 3) Try by filename only across known directories.
+    filename = requested.name
+    for base in search_dirs:
+        candidate = (base / filename).resolve()
+        if candidate.exists():
+            return candidate
+
+    # Keep the original path in error for clear debugging.
+    return requested
+
+
+def _resolve_tracks_dir(raw: str | None, config: AppConfig) -> Path:
+    if raw and raw.strip():
+        return _resolve_path(raw, config.assets_tracks_dir)
+
+    candidates = [
+        config.assets_tracks_dir,
+        Path("/assets/tracks"),
+        Path("/storage/tracks"),
+    ]
+    for path in candidates:
+        if path.exists() and path.is_dir():
+            return path
+    return config.assets_tracks_dir
