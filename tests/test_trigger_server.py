@@ -444,3 +444,100 @@ def test_tiktok_cuts_endpoint_creates_clips(tmp_path: Path, mocker) -> None:
 
     assert response.status_code == 200
     mock_create_cuts.assert_called_once()
+
+
+def test_publish_video_with_shorts_requires_auth(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = "secret_key"
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post("/publish-video-with-shorts", json={"source_video_path": "test.mp4"})
+    assert response.status_code == 401
+
+
+def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    config.youtube_default_privacy = "private"
+    config.telegram_bot_token = "token"
+    config.telegram_chat_id = "chat"
+    config.assets_source_videos_dir.mkdir(parents=True, exist_ok=True)
+    config.assets_tracks_dir.mkdir(parents=True, exist_ok=True)
+
+    source_video = config.assets_source_videos_dir / "test.mp4"
+    source_video.write_bytes(b"video")
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_create_cuts = mocker.patch("src.trigger_server.create_tiktok_cuts")
+    clip1 = Mock(output_path=tmp_path / "short1.mp4", track_path=tmp_path / "t1.mp3", start_second=0, duration_second=30)
+    clip2 = Mock(output_path=tmp_path / "short2.mp4", track_path=tmp_path / "t2.mp3", start_second=35, duration_second=30)
+    clip1.output_path.write_bytes(b"video")
+    clip2.output_path.write_bytes(b"video")
+    mock_create_cuts.return_value = [clip1, clip2]
+
+    mock_upload = mocker.patch("src.trigger_server.upload_video")
+    mock_upload.side_effect = [
+        Mock(video_id="main123", status="private"),
+        Mock(video_id="short1", status="private"),
+        Mock(video_id="short2", status="private"),
+    ]
+    mock_send_telegram = mocker.patch("src.trigger_server.send_files_to_telegram")
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post(
+        "/publish-video-with-shorts",
+        json={
+            "source_video_path": "test.mp4",
+            "publish_at_iso": "2026-05-01T12:00:00Z",
+            "shorts_count": 2,
+            "short_delay_hours": 1,
+            "short_interval_hours": 7,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["main_video"]["video_id"] == "main123"
+    assert response.json()["shorts_count"] == 2
+    assert mock_upload.call_count == 3
+    mock_create_cuts.assert_called_once()
+    mock_send_telegram.assert_called_once()

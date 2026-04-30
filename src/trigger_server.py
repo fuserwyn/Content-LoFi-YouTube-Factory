@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
@@ -8,10 +9,12 @@ from pydantic import BaseModel
 import uvicorn
 
 from .config import AppConfig
+from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
 from .main import run as pipeline_run
 from .notify_telegram import send_files_to_telegram
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
+from .upload_youtube import upload_video
 
 
 class RunRequest(BaseModel):
@@ -24,6 +27,21 @@ class RunRequest(BaseModel):
 class TikTokCutsRequest(BaseModel):
     source_video_path: str
     clips_count: int | None = None
+    clip_seconds: int | None = None
+    clip_min_seconds: int | None = None
+    clip_max_seconds: int | None = None
+    tracks_dir: str | None = None
+    output_dir: str | None = None
+
+
+class PublishVideoWithShortsRequest(BaseModel):
+    source_video_path: str
+    track_for_metadata: str | None = None
+    tags: list[str] | None = None
+    publish_at_iso: str | None = None
+    shorts_count: int = 3
+    short_delay_hours: int = 1
+    short_interval_hours: int = 7
     clip_seconds: int | None = None
     clip_min_seconds: int | None = None
     clip_max_seconds: int | None = None
@@ -141,6 +159,136 @@ def start_trigger_server(config: AppConfig) -> None:
         finally:
             run_lock.release()
 
+    @app.post("/publish-video-with-shorts")
+    def publish_video_with_shorts(
+        payload: PublishVideoWithShortsRequest,
+        x_trigger_key: str | None = Header(default=None),
+    ) -> dict:
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+        if not run_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="run already in progress")
+
+        try:
+            source_video_path = _resolve_source_video_path(payload.source_video_path, config)
+            tracks_dir = _resolve_tracks_dir(payload.tracks_dir, config)
+            output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
+            shorts_count = max(1, payload.shorts_count)
+            clip_seconds = config.tiktok_clip_seconds if payload.clip_seconds is None else payload.clip_seconds
+
+            publish_base = _parse_publish_datetime(payload.publish_at_iso)
+            logger.info(
+                "TRIGGER: publish-video-with-shorts requested | source=%s publish_at=%s shorts_count=%s short_delay_hours=%s short_interval_hours=%s",
+                source_video_path,
+                publish_base.isoformat(),
+                shorts_count,
+                payload.short_delay_hours,
+                payload.short_interval_hours,
+            )
+
+            tags_seed = payload.tags or config.content_tags
+            track_for_meta = payload.track_for_metadata
+            if track_for_meta:
+                track_path = _resolve_source_video_path(track_for_meta, config)
+            else:
+                track_path = source_video_path
+            main_meta = generate_metadata(track_path, tags_seed)
+            main_upload = upload_video(
+                video_path=source_video_path,
+                meta=main_meta,
+                client_id=config.youtube_client_id,
+                client_secret=config.youtube_client_secret,
+                refresh_token=config.youtube_refresh_token,
+                default_privacy=config.youtube_default_privacy,
+                category_id=config.youtube_category_id,
+                default_language=config.youtube_default_language,
+                publish_at_iso=publish_base.isoformat().replace("+00:00", "Z"),
+            )
+
+            shorts = create_tiktok_cuts(
+                source_video_path=source_video_path,
+                tracks_dir=tracks_dir,
+                output_dir=output_dir,
+                clips_count=shorts_count,
+                clip_seconds=max(5, clip_seconds),
+                width=config.tiktok_width,
+                height=config.tiktok_height,
+                fps=config.fps,
+                encode_preset=config.render_preset,
+                crf=config.render_crf,
+                clip_min_seconds=max(5, payload.clip_min_seconds) if payload.clip_min_seconds is not None else None,
+                clip_max_seconds=max(5, payload.clip_max_seconds) if payload.clip_max_seconds is not None else None,
+            )
+
+            short_uploads: list[dict] = []
+            for index, short in enumerate(shorts):
+                short_publish_at = publish_base + timedelta(
+                    hours=payload.short_delay_hours + (payload.short_interval_hours * index)
+                )
+                short_meta = VideoMeta(
+                    title=f"{main_meta.title[:80]} #shorts #{index + 1}",
+                    description=f"{main_meta.description}\n\nShort #{index + 1} from main release.",
+                    tags=list(dict.fromkeys(main_meta.tags + ["shorts", "tiktok", "vertical"]))[:15],
+                )
+                short_upload = upload_video(
+                    video_path=short.output_path,
+                    meta=short_meta,
+                    client_id=config.youtube_client_id,
+                    client_secret=config.youtube_client_secret,
+                    refresh_token=config.youtube_refresh_token,
+                    default_privacy=config.youtube_default_privacy,
+                    category_id=config.youtube_category_id,
+                    default_language=config.youtube_default_language,
+                    publish_at_iso=short_publish_at.isoformat().replace("+00:00", "Z"),
+                )
+                short_uploads.append(
+                    {
+                        "video_id": short_upload.video_id,
+                        "status": short_upload.status,
+                        "path": str(short.output_path),
+                        "publish_at_iso": short_publish_at.isoformat().replace("+00:00", "Z"),
+                        "start_second": short.start_second,
+                        "duration_second": short.duration_second,
+                    }
+                )
+
+            if config.telegram_bot_token and config.telegram_chat_id:
+                notify_file = source_video_path if source_video_path.exists() else None
+                if notify_file is not None:
+                    send_files_to_telegram(
+                        bot_token=config.telegram_bot_token,
+                        chat_id=config.telegram_chat_id,
+                        file_paths=[notify_file],
+                        caption_prefix=(
+                            f"Published main={main_upload.video_id} "
+                            f"shorts={len(short_uploads)} base={publish_base.isoformat().replace('+00:00', 'Z')}"
+                        ),
+                    )
+
+            return {
+                "status": "ok",
+                "message": "main video and shorts uploaded",
+                "main_video": {
+                    "video_id": main_upload.video_id,
+                    "status": main_upload.status,
+                    "path": str(source_video_path),
+                    "publish_at_iso": publish_base.isoformat().replace("+00:00", "Z"),
+                },
+                "shorts_count": len(short_uploads),
+                "shorts": short_uploads,
+                "schedule": {
+                    "short_delay_hours": payload.short_delay_hours,
+                    "short_interval_hours": payload.short_interval_hours,
+                },
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("TRIGGER: publish-video-with-shorts failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+        finally:
+            run_lock.release()
+
     logger.info("TRIGGER: server started on 0.0.0.0:8080")
     uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
 
@@ -199,3 +347,13 @@ def _resolve_tracks_dir(raw: str | None, config: AppConfig) -> Path:
         if path.exists() and path.is_dir():
             return path
     return config.assets_tracks_dir
+
+
+def _parse_publish_datetime(raw: str | None) -> datetime:
+    if raw and raw.strip():
+        normalized = raw.strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
