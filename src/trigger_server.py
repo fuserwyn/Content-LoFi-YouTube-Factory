@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 from .config import AppConfig
@@ -56,6 +56,8 @@ class PublishVideoWithShortsRequest(BaseModel):
     clip_max_seconds: int | None = None
     tracks_dir: str | None = None
     output_dir: str | None = None
+    short_publish_offset_hours: list[float] | None = None
+    shorts_use_main_track_thirds: bool = False
 
 
 class GeneratePoyoAndPublishRequest(BaseModel):
@@ -100,7 +102,7 @@ class GeneratePoyoShortsOnlyRequest(BaseModel):
 
 
 class RunPublishWithShortsRequest(BaseModel):
-    """Pexels/local clips + track render, then main upload + scheduled shorts (same as /publish-video-with-shorts)."""
+    """Pexels/local clips + track render, then main upload + scheduled shorts."""
 
     track: str | None = None
     allow_recent_preferred: bool = False
@@ -109,12 +111,14 @@ class RunPublishWithShortsRequest(BaseModel):
     publish_at_iso: str | None = None
     shorts_count: int = 3
     short_delay_hours: int = 24
-    short_interval_hours: int = 24
+    short_interval_hours: int = 48
+    short_publish_offset_hours: list[float] | None = Field(default_factory=lambda: [12.0, 24.0, 40.0])
+    shorts_use_main_track_thirds: bool = True
     main_privacy_status: str = "public"
     shorts_privacy_status: str = "private"
     cleanup_source_after_publish: bool = True
     cleanup_shorts_after_upload: bool = True
-    clip_seconds: int | None = None
+    clip_seconds: int | None = 30
     clip_min_seconds: int | None = None
     clip_max_seconds: int | None = None
     tracks_dir: str | None = None
@@ -174,6 +178,22 @@ def publish_main_and_shorts_impl(
         ),
     )
 
+    offsets_raw = payload.short_publish_offset_hours
+    if offsets_raw is not None and len(offsets_raw) == shorts_count:
+        short_hour_offsets = [float(h) for h in offsets_raw]
+    else:
+        short_hour_offsets = [
+            float(payload.short_delay_hours + payload.short_interval_hours * i) for i in range(shorts_count)
+        ]
+
+    fixed_track_audio: Path | None = None
+    slice_track_parts = False
+    if payload.shorts_use_main_track_thirds:
+        if not track_for_meta:
+            raise RuntimeError("shorts_use_main_track_thirds requires track_for_metadata")
+        fixed_track_audio = track_path
+        slice_track_parts = True
+
     shorts = create_tiktok_cuts(
         source_video_path=source_video_path,
         tracks_dir=tracks_dir,
@@ -187,13 +207,13 @@ def publish_main_and_shorts_impl(
         crf=config.render_crf,
         clip_min_seconds=max(5, payload.clip_min_seconds) if payload.clip_min_seconds is not None else None,
         clip_max_seconds=max(5, payload.clip_max_seconds) if payload.clip_max_seconds is not None else None,
+        fixed_track_for_audio=fixed_track_audio,
+        slice_track_into_equal_parts=slice_track_parts,
     )
 
     short_uploads: list[dict] = []
     for index, short in enumerate(shorts):
-        short_publish_at = publish_base + timedelta(
-            hours=payload.short_delay_hours + (payload.short_interval_hours * index)
-        )
+        short_publish_at = publish_base + timedelta(hours=short_hour_offsets[index])
         short_meta = VideoMeta(
             title=f"{main_meta.title[:80]} #shorts #{index + 1}",
             description=f"{main_meta.description}\n\nShort #{index + 1} from main release.",
@@ -263,6 +283,7 @@ def publish_main_and_shorts_impl(
         "shorts_count": len(short_uploads),
         "shorts": short_uploads,
         "schedule": {
+            "short_publish_offset_hours": short_hour_offsets,
             "short_delay_hours": payload.short_delay_hours,
             "short_interval_hours": payload.short_interval_hours,
         },
@@ -462,6 +483,8 @@ def start_trigger_server(config: AppConfig) -> None:
                 shorts_count=payload.shorts_count,
                 short_delay_hours=payload.short_delay_hours,
                 short_interval_hours=payload.short_interval_hours,
+                short_publish_offset_hours=payload.short_publish_offset_hours,
+                shorts_use_main_track_thirds=payload.shorts_use_main_track_thirds,
                 main_privacy_status=payload.main_privacy_status,
                 shorts_privacy_status=payload.shorts_privacy_status,
                 cleanup_source_after_publish=payload.cleanup_source_after_publish,

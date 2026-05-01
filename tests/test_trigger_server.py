@@ -550,6 +550,7 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert response.status_code == 200
     assert response.json()["main_video"]["video_id"] == "main123"
     assert response.json()["shorts_count"] == 2
+    assert response.json()["schedule"]["short_publish_offset_hours"] == [1.0, 8.0]
     assert mock_upload.call_count == 3
     mock_create_cuts.assert_called_once()
     mock_send_telegram.assert_called_once()
@@ -563,6 +564,73 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert not source_video.exists()
     assert not clip1.output_path.exists()
     assert not clip2.output_path.exists()
+
+
+def test_publish_video_with_shorts_splits_main_track_into_equal_parts(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    config.youtube_default_privacy = "private"
+    config.assets_source_videos_dir.mkdir(parents=True, exist_ok=True)
+    config.assets_tracks_dir.mkdir(parents=True, exist_ok=True)
+
+    source_video = config.assets_source_videos_dir / "test.mp4"
+    source_video.write_bytes(b"video")
+    meta_track = (config.assets_tracks_dir / "loop.mp3").resolve()
+    meta_track.write_bytes(b"audio")
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_create_cuts = mocker.patch("src.trigger_server.create_tiktok_cuts")
+    short_paths = [tmp_path / f"s{i}.mp4" for i in range(3)]
+    for p in short_paths:
+        p.write_bytes(b"v")
+    mock_create_cuts.return_value = [
+        Mock(output_path=short_paths[i], track_path=meta_track, start_second=i * 10, duration_second=30)
+        for i in range(3)
+    ]
+    mock_upload = mocker.patch("src.trigger_server.upload_video")
+    mock_upload.side_effect = [
+        Mock(video_id="m", status="private"),
+        Mock(video_id="s1", status="private"),
+        Mock(video_id="s2", status="private"),
+        Mock(video_id="s3", status="private"),
+    ]
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except Exception:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post(
+        "/publish-video-with-shorts",
+        json={
+            "source_video_path": "test.mp4",
+            "track_for_metadata": str(meta_track),
+            "shorts_use_main_track_thirds": True,
+            "shorts_count": 3,
+            "short_publish_offset_hours": [12, 24, 40],
+        },
+    )
+
+    assert response.status_code == 200
+    mock_create_cuts.assert_called_once()
+    cuts_kw = mock_create_cuts.call_args.kwargs
+    assert cuts_kw["slice_track_into_equal_parts"] is True
+    assert cuts_kw["fixed_track_for_audio"] == meta_track
 
 
 def test_publish_video_with_shorts_skips_when_source_missing(tmp_path: Path, mocker) -> None:

@@ -323,6 +323,82 @@ def test_render_one_clip_builds_correct_command(tmp_path: Path, mocker) -> None:
     assert str(output) in cmd
 
 
+def test_equal_segment_audio_window_splits_track_into_equal_slices() -> None:
+    from src.tiktok_cuts import _equal_segment_audio_window as seg
+
+    assert seg(track_duration_seconds=90, clip_index=0, segments_count=3, clip_duration_seconds=30) == (0, 30)
+    assert seg(track_duration_seconds=90, clip_index=1, segments_count=3, clip_duration_seconds=30) == (30, 30)
+    assert seg(track_duration_seconds=90, clip_index=2, segments_count=3, clip_duration_seconds=30) == (60, 30)
+
+
+def test_render_one_clip_bounded_audio_omits_stream_loop(tmp_path: Path, mocker) -> None:
+    source_video = tmp_path / "source.mp4"
+    track = tmp_path / "track.mp3"
+    output = tmp_path / "output.mp4"
+
+    mock_proc = mocker.Mock()
+    mock_proc.returncode = 0
+    mock_run = mocker.patch("src.tiktok_cuts.subprocess.run", return_value=mock_proc)
+
+    _render_one_clip(
+        source_video_path=source_video,
+        track_path=track,
+        output_path=output,
+        start_second=0,
+        duration_second=30,
+        track_start_second=60,
+        width=1080,
+        height=1920,
+        fps=30,
+        encode_preset="veryfast",
+        crf=23,
+        audio_decode_seconds=30,
+    )
+
+    cmd = mock_run.call_args[0][0]
+    assert "-stream_loop" not in cmd
+    assert cmd.index("60") < cmd.index(str(track))
+
+
+def test_create_tiktok_cuts_slice_mode_uses_equal_track_segments(tmp_path: Path, mocker) -> None:
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"v")
+    track = tmp_path / "t.mp3"
+    track.write_bytes(b"t")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    def probe_side_effect(path: Path):
+        if path == src:
+            return 400
+        if path == track:
+            return 99
+        return 1
+
+    mocker.patch("src.tiktok_cuts._probe_media_duration_seconds", side_effect=probe_side_effect)
+    mock_render = mocker.patch("src.tiktok_cuts._render_one_clip")
+
+    create_tiktok_cuts(
+        source_video_path=src,
+        tracks_dir=tmp_path / "ignored_tracks",
+        output_dir=out,
+        clips_count=3,
+        clip_seconds=30,
+        width=1080,
+        height=1920,
+        fps=30,
+        encode_preset="veryfast",
+        crf=23,
+        fixed_track_for_audio=track,
+        slice_track_into_equal_parts=True,
+    )
+
+    assert mock_render.call_count == 3
+    starts = [mock_render.call_args_list[i].kwargs["track_start_second"] for i in range(3)]
+    assert starts == [0, 33, 66]
+    assert all(mock_render.call_args_list[i].kwargs["audio_decode_seconds"] == 30 for i in range(3))
+
+
 def test_render_one_clip_raises_on_failure(tmp_path: Path, mocker) -> None:
     source_video = tmp_path / "source.mp4"
     track = tmp_path / "track.mp3"

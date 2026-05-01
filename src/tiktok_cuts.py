@@ -10,6 +10,25 @@ from typing import Callable
 from .select_track import SUPPORTED_EXTENSIONS
 
 
+def _equal_segment_audio_window(
+    *,
+    track_duration_seconds: int | None,
+    clip_index: int,
+    segments_count: int,
+    clip_duration_seconds: int,
+) -> tuple[int, int]:
+    """Audio for clip_index-th equal slice [lo, hi) of the track; take up to clip_duration_seconds."""
+    if track_duration_seconds is None or track_duration_seconds < 1:
+        return 0, clip_duration_seconds
+    sc = max(1, segments_count)
+    lo = int(track_duration_seconds * clip_index / sc)
+    hi = int(track_duration_seconds * (clip_index + 1) / sc)
+    hi = max(lo + 1, min(track_duration_seconds, hi))
+    avail = max(1, hi - lo)
+    audio_take = min(max(1, clip_duration_seconds), avail)
+    return lo, audio_take
+
+
 @dataclass
 class TikTokClipResult:
     output_path: Path
@@ -32,13 +51,23 @@ def create_tiktok_cuts(
     clip_min_seconds: int | None = None,
     clip_max_seconds: int | None = None,
     on_clip_ready: Callable[[TikTokClipResult], None] | None = None,
+    fixed_track_for_audio: Path | None = None,
+    slice_track_into_equal_parts: bool = False,
 ) -> list[TikTokClipResult]:
     if not source_video_path.exists():
         raise RuntimeError(f"TikTok source video not found: {source_video_path}")
 
-    tracks = _list_tracks(tracks_dir)
-    if not tracks:
-        raise RuntimeError(f"No tracks available for TikTok cuts in: {tracks_dir}")
+    if slice_track_into_equal_parts and fixed_track_for_audio is None:
+        raise RuntimeError("slice_track_into_equal_parts requires fixed_track_for_audio")
+
+    if fixed_track_for_audio is not None:
+        if not fixed_track_for_audio.exists():
+            raise RuntimeError(f"Fixed TikTok audio track not found: {fixed_track_for_audio}")
+        tracks = [fixed_track_for_audio]
+    else:
+        tracks = _list_tracks(tracks_dir)
+        if not tracks:
+            raise RuntimeError(f"No tracks available for TikTok cuts in: {tracks_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     source_duration = _probe_media_duration_seconds(source_video_path)
@@ -53,7 +82,8 @@ def create_tiktok_cuts(
         clip_max_seconds=clip_max_seconds,
     )
     shuffled_tracks = tracks[:]
-    random.shuffle(shuffled_tracks)
+    if fixed_track_for_audio is None:
+        random.shuffle(shuffled_tracks)
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     results: list[TikTokClipResult] = []
@@ -63,12 +93,21 @@ def create_tiktok_cuts(
         if track_path not in track_durations_cache:
             track_durations_cache[track_path] = _probe_media_duration_seconds(track_path)
         track_duration = track_durations_cache[track_path]
-        track_start_second = _choose_track_start_second(
-            track_duration_seconds=track_duration,
-            clip_duration_seconds=duration_second,
-            clip_index=index,
-            total_clips=len(timeline),
-        )
+        audio_decode_seconds: int | None = None
+        if fixed_track_for_audio is not None and slice_track_into_equal_parts:
+            track_start_second, audio_decode_seconds = _equal_segment_audio_window(
+                track_duration_seconds=track_duration,
+                clip_index=index,
+                segments_count=len(timeline),
+                clip_duration_seconds=duration_second,
+            )
+        else:
+            track_start_second = _choose_track_start_second(
+                track_duration_seconds=track_duration,
+                clip_duration_seconds=duration_second,
+                clip_index=index,
+                total_clips=len(timeline),
+            )
         output_path = output_dir / f"tiktok_{run_stamp}_{index + 1:02d}.mp4"
         _render_one_clip(
             source_video_path=source_video_path,
@@ -82,6 +121,7 @@ def create_tiktok_cuts(
             fps=fps,
             encode_preset=encode_preset,
             crf=crf,
+            audio_decode_seconds=audio_decode_seconds,
         )
         results.append(
             TikTokClipResult(
@@ -184,7 +224,28 @@ def _render_one_clip(
     fps: int,
     encode_preset: str,
     crf: int,
+    audio_decode_seconds: int | None = None,
 ) -> None:
+    audio_opts: list[str]
+    if audio_decode_seconds is not None:
+        audio_opts = [
+            "-ss",
+            str(track_start_second),
+            "-t",
+            str(audio_decode_seconds),
+            "-i",
+            str(track_path),
+        ]
+    else:
+        audio_opts = [
+            "-stream_loop",
+            "-1",
+            "-ss",
+            str(track_start_second),
+            "-i",
+            str(track_path),
+        ]
+
     cmd = [
         "ffmpeg",
         "-y",
@@ -194,12 +255,7 @@ def _render_one_clip(
         str(duration_second),
         "-i",
         str(source_video_path),
-        "-stream_loop",
-        "-1",
-        "-ss",
-        str(track_start_second),
-        "-i",
-        str(track_path),
+        *audio_opts,
         "-vf",
         f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps}",
         "-map",
