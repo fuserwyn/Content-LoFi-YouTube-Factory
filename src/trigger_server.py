@@ -37,11 +37,14 @@ class TikTokCutsRequest(BaseModel):
 class PublishVideoWithShortsRequest(BaseModel):
     source_video_path: str
     track_for_metadata: str | None = None
+    theme: str | None = None
     tags: list[str] | None = None
     publish_at_iso: str | None = None
     shorts_count: int = 3
     short_delay_hours: int = 1
     short_interval_hours: int = 7
+    main_privacy_status: str = "public"
+    shorts_privacy_status: str = "private"
     clip_seconds: int | None = None
     clip_min_seconds: int | None = None
     clip_max_seconds: int | None = None
@@ -194,17 +197,21 @@ def start_trigger_server(config: AppConfig) -> None:
                 track_path = _resolve_source_video_path(track_for_meta, config)
             else:
                 track_path = source_video_path
-            main_meta = generate_metadata(track_path, tags_seed)
+            main_meta = generate_metadata(track_path, tags_seed, theme=payload.theme)
             main_upload = upload_video(
                 video_path=source_video_path,
                 meta=main_meta,
                 client_id=config.youtube_client_id,
                 client_secret=config.youtube_client_secret,
                 refresh_token=config.youtube_refresh_token,
-                default_privacy=config.youtube_default_privacy,
+                default_privacy=payload.main_privacy_status,
                 category_id=config.youtube_category_id,
                 default_language=config.youtube_default_language,
-                publish_at_iso=publish_base.isoformat().replace("+00:00", "Z"),
+                publish_at_iso=(
+                    publish_base.isoformat().replace("+00:00", "Z")
+                    if payload.main_privacy_status == "private"
+                    else ""
+                ),
             )
 
             shorts = create_tiktok_cuts(
@@ -238,10 +245,14 @@ def start_trigger_server(config: AppConfig) -> None:
                     client_id=config.youtube_client_id,
                     client_secret=config.youtube_client_secret,
                     refresh_token=config.youtube_refresh_token,
-                    default_privacy=config.youtube_default_privacy,
+                    default_privacy=payload.shorts_privacy_status,
                     category_id=config.youtube_category_id,
                     default_language=config.youtube_default_language,
-                    publish_at_iso=short_publish_at.isoformat().replace("+00:00", "Z"),
+                    publish_at_iso=(
+                        short_publish_at.isoformat().replace("+00:00", "Z")
+                        if payload.shorts_privacy_status == "private"
+                        else ""
+                    ),
                 )
                 short_uploads.append(
                     {

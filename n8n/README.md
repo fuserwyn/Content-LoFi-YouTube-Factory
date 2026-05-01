@@ -6,6 +6,8 @@ This folder contains ready-to-import workflows for triggering Content Factory:
 - `workflows/content-factory-scheduled-run.json` - scheduled daily trigger (20:00 Kyiv / 17:00 UTC)
 - `workflows/content-factory-30-day-plan.json` - 30-day daily plan (track + tags + theme)
 - `workflows/content-factory-tiktok-cuts-manual.json` - manual TikTok cuts from an existing source video
+- `workflows/content-factory-30-day-main-plus-shorts.json` - separate daily workflow: 1 main video + 3 shorts from the same source
+- `workflows/content-factory-22-tracks-every-3-days-main-plus-shorts.json` - separate workflow for 22 tracks: 1 main every 3 days + 1 short per day (3 shorts total)
 
 ## Required n8n environment variables
 
@@ -13,6 +15,7 @@ Set these in the n8n service:
 
 - `CONTENT_FACTORY_RUN_URL=https://<content-factory-domain>/run`
 - `CONTENT_FACTORY_TIKTOK_CUTS_URL=https://<content-factory-domain>/tiktok-cuts`
+- `CONTENT_FACTORY_PUBLISH_WITH_SHORTS_URL=https://<content-factory-domain>/publish-video-with-shorts`
 - `TRIGGER_API_KEY=<same value as Content Factory TRIGGER_API_KEY>`
 
 ## Import via n8n UI
@@ -40,3 +43,15 @@ Set these in the n8n service:
   - Optional: set `clip_min_seconds` and `clip_max_seconds` for varied clip lengths
   - Optional: set `tracks_dir`, `output_dir`
   - If `TELEGRAM_SEND_TIKTOK=true`, clips are sent to Telegram one by one as each clip finishes
+- For the 30-day main+shorts workflow:
+  - Open node `Build Day Payload`
+  - Replace `/storage/videos/day-01.mp4` ... `/storage/videos/day-30.mp4` with your real files
+  - Keep `shorts_count=3`, `short_delay_hours=1`, `short_interval_hours=7` for the required schedule
+  - Workflow calls `/publish-video-with-shorts` once per day; shorts schedule is handled by backend endpoint
+- For the 22-tracks every-3-days workflow:
+  - Open node `Build 22-Track Cycle Payload`
+  - Replace `/storage/videos/track-01.mp4` ... `/storage/videos/track-22.mp4` with your real files
+  - Track names from `assets/tracks` are already prefilled into `track_for_metadata`
+  - Cron runs daily, but node publishes only on every 3rd day (stable 72h cadence)
+  - Main video is sent with `main_privacy_status=public` (published immediately)
+  - Shorts are sent with `shorts_privacy_status=private` and scheduled at +24h, +48h, +72h

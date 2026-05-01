@@ -1,0 +1,96 @@
+{
+  "name": "Content Factory - 30 Day Main + Shorts",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "custom",
+              "cronExpression": "0 17 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger-node",
+      "name": "Daily at 20:00 Kyiv",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const plan = [\n  { day: 1, source_video_path: '/storage/videos/day-01.mp4', tags: ['nature','forest','morning'] },\n  { day: 2, source_video_path: '/storage/videos/day-02.mp4', tags: ['ocean','sunset','calm'] },\n  { day: 3, source_video_path: '/storage/videos/day-03.mp4', tags: ['rain','city','night'] },\n  { day: 4, source_video_path: '/storage/videos/day-04.mp4', tags: ['mountains','clouds','ambient'] },\n  { day: 5, source_video_path: '/storage/videos/day-05.mp4', tags: ['surf','beach','golden hour'] },\n  { day: 6, source_video_path: '/storage/videos/day-06.mp4', tags: ['river','green','chill'] },\n  { day: 7, source_video_path: '/storage/videos/day-07.mp4', tags: ['sea','waves','focus'] },\n  { day: 8, source_video_path: '/storage/videos/day-08.mp4', tags: ['forest','rain','calm'] },\n  { day: 9, source_video_path: '/storage/videos/day-09.mp4', tags: ['sunrise','mountain','study'] },\n  { day: 10, source_video_path: '/storage/videos/day-10.mp4', tags: ['ocean','drone','ambient'] },\n  { day: 11, source_video_path: '/storage/videos/day-11.mp4', tags: ['jungle','mist','deep'] },\n  { day: 12, source_video_path: '/storage/videos/day-12.mp4', tags: ['city','night','lights'] },\n  { day: 13, source_video_path: '/storage/videos/day-13.mp4', tags: ['waterfall','nature','relax'] },\n  { day: 14, source_video_path: '/storage/videos/day-14.mp4', tags: ['beach','sun','chill'] },\n  { day: 15, source_video_path: '/storage/videos/day-15.mp4', tags: ['forest','path','focus'] },\n  { day: 16, source_video_path: '/storage/videos/day-16.mp4', tags: ['surf','ocean','calm'] },\n  { day: 17, source_video_path: '/storage/videos/day-17.mp4', tags: ['snow','mountain','ambient'] },\n  { day: 18, source_video_path: '/storage/videos/day-18.mp4', tags: ['rain','window','sleep'] },\n  { day: 19, source_video_path: '/storage/videos/day-19.mp4', tags: ['lake','sunset','meditation'] },\n  { day: 20, source_video_path: '/storage/videos/day-20.mp4', tags: ['island','sea','vibes'] },\n  { day: 21, source_video_path: '/storage/videos/day-21.mp4', tags: ['forest','wind','deep work'] },\n  { day: 22, source_video_path: '/storage/videos/day-22.mp4', tags: ['ocean','moonlight','night'] },\n  { day: 23, source_video_path: '/storage/videos/day-23.mp4', tags: ['city','rain','late night'] },\n  { day: 24, source_video_path: '/storage/videos/day-24.mp4', tags: ['mountain','sunset','focus'] },\n  { day: 25, source_video_path: '/storage/videos/day-25.mp4', tags: ['sea','rocks','calm'] },\n  { day: 26, source_video_path: '/storage/videos/day-26.mp4', tags: ['river','autumn','study'] },\n  { day: 27, source_video_path: '/storage/videos/day-27.mp4', tags: ['forest','night','sleep'] },\n  { day: 28, source_video_path: '/storage/videos/day-28.mp4', tags: ['beach','dawn','ambient'] },\n  { day: 29, source_video_path: '/storage/videos/day-29.mp4', tags: ['ocean','storm','dark'] },\n  { day: 30, source_video_path: '/storage/videos/day-30.mp4', tags: ['nature','mixed','lofi'] }\n];\n\nconst dayIndex = (new Date().getUTCDate() - 1) % plan.length;\nconst item = plan[dayIndex];\n\nreturn [{\n  json: {\n    source_video_path: item.source_video_path,\n    tags: item.tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 3,\n    short_delay_hours: 1,\n    short_interval_hours: 7,\n    clip_seconds: 30\n  }\n}];"
+      },
+      "id": "build-day-payload",
+      "name": "Build Day Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_PUBLISH_WITH_SHORTS_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "run-main-plus-shorts",
+      "name": "Run Main + Shorts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        830,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 20:00 Kyiv": {
+      "main": [
+        [
+          {
+            "node": "Build Day Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Day Payload": {
+      "main": [
+        [
+          {
+            "node": "Run Main + Shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}

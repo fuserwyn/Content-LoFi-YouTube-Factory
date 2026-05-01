@@ -1,0 +1,96 @@
+{
+  "name": "Content Factory - 22 Tracks Every 3 Days",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "custom",
+              "cronExpression": "0 17 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger-node",
+      "name": "Daily at 20:00 Kyiv",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const videos = [\n  '/storage/videos/track-01.mp4',\n  '/storage/videos/track-02.mp4',\n  '/storage/videos/track-03.mp4',\n  '/storage/videos/track-04.mp4',\n  '/storage/videos/track-05.mp4',\n  '/storage/videos/track-06.mp4',\n  '/storage/videos/track-07.mp4',\n  '/storage/videos/track-08.mp4',\n  '/storage/videos/track-09.mp4',\n  '/storage/videos/track-10.mp4',\n  '/storage/videos/track-11.mp4',\n  '/storage/videos/track-12.mp4',\n  '/storage/videos/track-13.mp4',\n  '/storage/videos/track-14.mp4',\n  '/storage/videos/track-15.mp4',\n  '/storage/videos/track-16.mp4',\n  '/storage/videos/track-17.mp4',\n  '/storage/videos/track-18.mp4',\n  '/storage/videos/track-19.mp4',\n  '/storage/videos/track-20.mp4',\n  '/storage/videos/track-21.mp4',\n  '/storage/videos/track-22.mp4'\n];\n\nconst tracks = [\n  '01- Get Next Line.mp3',\n  '02- Comprehension.mp3',\n  '03 - Sea.mp3',\n  '04 - Lazy Day.mp3',\n  '05 - Go Piano.mp3',\n  '06 - Radio Schelkovo(feat DrumON).mp3',\n  '07 - Yeah.mp3',\n  '08 - Invitation.mp3',\n  '09 - Got it trumpet version (feat. Roman Belikov).mp3',\n  '10 - Runaway (feat. DmitJ).mp3',\n  'LoFi Travel - Chilling Chilli.mp3',\n  'LoFi Travel - Gingerbread.mp3',\n  'LoFi Travel - Healing Oda.mp3',\n  'LoFi Travel - Mesmerizing Lake.mp3',\n  'LoFi Travel - Morning Butterflies.mp3',\n  'LoFi Travel - Rainy Day.mp3',\n  'LoFi Travel - Roofer.mp3',\n  'LoFi Travel - Shed Dance.mp3',\n  'LoFi Travel - Waves.mp3',\n  'LoFi Travel - space dreaming.mp3',\n  'LoFi Travel, Lofi Sax - new life.mp3',\n  'LoFi Travel, Zhenya dzen, Lofi Sax - Cheerfulness at Dawn.mp3'\n];\n\nconst themes = [\n  'Forest Morning',\n  'Ocean Sunset',\n  'Rainy City Night',\n  'Cloudy Mountains',\n  'Surf Golden Hour',\n  'Riverside Chill',\n  'Sea Focus',\n  'Forest Rain',\n  'Sunrise Study',\n  'Ocean Drift',\n  'Misty Jungle',\n  'Night Lights',\n  'Waterfall Relax',\n  'Sunny Beach Chill',\n  'Forest Path Focus',\n  'Calm Surf',\n  'Snowy Ambient',\n  'Rain Window Sleep',\n  'Lake Meditation',\n  'Island Vibes',\n  'Nature Lofi Mixed',\n  'Moonlight Ocean'\n];\n\nconst anchor = Date.parse('2026-01-01T00:00:00Z');\nconst now = Date.now();\nconst elapsedDays = Math.floor((now - anchor) / (24 * 60 * 60 * 1000));\n\nif (elapsedDays % 3 !== 0) {\n  return [];\n}\n\nconst cycleIndex = Math.floor(elapsedDays / 3) % videos.length;\nconst trackIndex = cycleIndex % tracks.length;\nconst themeIndex = cycleIndex % themes.length;\n\nreturn [{\n  json: {\n    source_video_path: videos[cycleIndex],\n    track_for_metadata: tracks[trackIndex],\n    theme: themes[themeIndex],\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 3,\n    short_delay_hours: 24,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'private'\n  }\n}];"
+      },
+      "id": "build-cycle-payload",
+      "name": "Build 22-Track Cycle Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_PUBLISH_WITH_SHORTS_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "run-main-plus-shorts",
+      "name": "Publish Main + 3 Shorts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Daily at 20:00 Kyiv": {
+      "main": [
+        [
+          {
+            "node": "Build 22-Track Cycle Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build 22-Track Cycle Payload": {
+      "main": [
+        [
+          {
+            "node": "Publish Main + 3 Shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
