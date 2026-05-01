@@ -18,8 +18,35 @@
       "typeVersion": 1,
       "position": [
         220,
-        300
+        260
       ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Manual start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 1,
+        "unit": "minutes"
+      },
+      "id": "wait-one-minute-node",
+      "name": "Wait 1 minute",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        420,
+        420
+      ],
+      "webhookId": ""
     },
     {
       "parameters": {
@@ -41,22 +68,22 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        400,
-        300
+        560,
+        340
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Track filenames come from GET /tracks (same discovery as server assets/tracks — sorted).\n// Set CONTENT_FACTORY_BASE_URL=https://your-deployment.fly.dev (same host as factory).\nconst data = $input.first().json;\nconst tracks = data.tracks || [];\n\nif (!tracks.length) {\n  return [];\n}\n\nconst themes = ['Lake Meditation', 'Ocean Calm', 'Forest Chill'];\nconst tagSets = [\n  ['nature', 'forest', 'lofi'],\n  ['ocean', 'waves', 'chill'],\n  ['rain', 'ambient', 'study'],\n];\n\nconst anchor = Date.parse('2026-01-01T02:00:00Z');\nconst now = Date.now();\nconst elapsedDays = Math.floor((now - anchor) / (24 * 60 * 60 * 1000));\n\nif (elapsedDays % 2 !== 0) {\n  return [];\n}\n\nconst cycleIndex = Math.floor(elapsedDays / 2) % tracks.length;\n\nconst mainAt = new Date(anchor + elapsedDays * 24 * 60 * 60 * 1000);\n\nreturn [{\n  json: {\n    track: tracks[cycleIndex],\n    allow_recent_preferred: false,\n    tags: tagSets[cycleIndex % tagSets.length],\n    theme: themes[cycleIndex % themes.length],\n    publish_at_iso: mainAt.toISOString(),\n    shorts_count: 3,\n    short_publish_offset_hours: [12, 24, 40],\n    shorts_use_main_track_thirds: true,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'public',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
+        "jsCode": "// Tracks from GET /tracks. anchorMs — первый успешный проход этой ноды (workflow static data).\n// Ручной запуск: нода Wait даёт +1 мин до GET; cron — без паузы.\n// Env: CONTENT_FACTORY_BASE_URL, TRIGGER_API_KEY. Функция: getWorkflowStaticData('global').\nconst data = $input.first().json;\nconst tracks = data.tracks || [];\n\nif (!tracks.length) {\n  return [];\n}\n\nconst staticData = getWorkflowStaticData('global');\nif (staticData.anchorMs == null) {\n  staticData.anchorMs = Date.now();\n}\nconst anchorMs = staticData.anchorMs;\nconst elapsedDays = Math.floor((Date.now() - anchorMs) / (24 * 60 * 60 * 1000));\n\nif (elapsedDays % 2 !== 0) {\n  return [];\n}\n\nconst themes = ['Lake Meditation', 'Ocean Calm', 'Forest Chill'];\nconst tagSets = [\n  ['nature', 'forest', 'lofi'],\n  ['ocean', 'waves', 'chill'],\n  ['rain', 'ambient', 'study'],\n];\n\nconst cycleIndex = Math.floor(elapsedDays / 2) % tracks.length;\nconst mainAt = new Date(anchorMs + elapsedDays * 24 * 60 * 60 * 1000);\n\nreturn [{\n  json: {\n    track: tracks[cycleIndex],\n    allow_recent_preferred: false,\n    tags: tagSets[cycleIndex % tagSets.length],\n    theme: themes[cycleIndex % themes.length],\n    publish_at_iso: mainAt.toISOString(),\n    shorts_count: 3,\n    short_publish_offset_hours: [12, 24, 40],\n    shorts_use_main_track_thirds: true,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'public',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
       },
       "id": "build-pexels-publish-payload",
       "name": "Every 2 days: pick track + payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        620,
-        300
+        760,
+        340
       ]
     },
     {
@@ -85,13 +112,35 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        860,
-        300
+        1000,
+        340
       ]
     }
   ],
   "connections": {
     "Daily check (runs workflow)": {
+      "main": [
+        [
+          {
+            "node": "GET tracks list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual start": {
+      "main": [
+        [
+          {
+            "node": "Wait 1 minute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1 minute": {
       "main": [
         [
           {
