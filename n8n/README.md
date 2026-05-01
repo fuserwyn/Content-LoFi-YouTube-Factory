@@ -54,9 +54,9 @@ Set these in the n8n service:
   - Workflow calls `/publish-video-with-shorts` once per day; shorts schedule is handled by backend endpoint
 - For the 22-tracks every-3-days workflow:
   - Open node `Build 22-Track Cycle Payload`
-  - Workflow now generates each long video via Poyo (`poyo_payload.prompt`) and then publishes long + shorts
+  - Cron node is set to 20:00 Moscow (`0 17 * * *` in UTC)
+  - This workflow does NOT use Poyo; it expects ready source videos (`/storage/videos/track-01.mp4` ... `/storage/videos/track-22.mp4`)
   - Track names from `assets/tracks` are prefilled into `track_for_metadata`
-  - You can tune prompts/themes directly inside the node arrays
   - Cron runs daily, but node publishes only on every 3rd day (stable 72h cadence)
   - Main video is sent with `main_privacy_status=public` (published immediately)
   - Shorts are sent with `shorts_privacy_status=private` and scheduled at +24h, +48h, +72h
