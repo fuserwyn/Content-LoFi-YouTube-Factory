@@ -20,7 +20,7 @@ class RenderResult:
     planned_seconds: int
     final_target_seconds: int
     looped_stitched_video: bool
-    tail_padded_seconds: int
+    tail_padded_seconds: int  # legacy API field; freeze padding removed, always 0
 
 
 @dataclass
@@ -133,23 +133,24 @@ def render_video_with_ffmpeg(
 
     final_target_seconds = target_duration_seconds
     final_cmd = ["ffmpeg", "-y"]
-    should_loop_stitched_video = not no_repeat_clips_in_single_video
-    tail_padded_seconds = 0
+    # Loop stitched montage to fill audio when either (a) repeat mode, or (b) strict no-repeat
+    # but unique footage is shorter than the track — repeat the full stitched clip (motion),
+    # never freeze on the last frame (tpad clone).
+    use_stream_loop_on_stitched = not no_repeat_clips_in_single_video
     if no_repeat_clips_in_single_video:
-        # No-repeat mode never loops stitched video. If unique footage is insufficient,
-        # extend with a cloned final frame to keep the full track length.
         if planned_seconds < target_duration_seconds:
-            tail_padded_seconds = target_duration_seconds - planned_seconds
+            gap_sec = target_duration_seconds - planned_seconds
             LOGGER.warning(
                 "RENDER: unique footage shorter than target (planned=%ss target=%ss); "
-                "padding tail with freeze-frame for %ss",
+                "looping stitched montage to fill %ss (no freeze frames)",
                 planned_seconds,
                 target_duration_seconds,
-                tail_padded_seconds,
+                gap_sec,
             )
+            use_stream_loop_on_stitched = True
         LOGGER.info("RENDER: strict no-repeat mode, final_target_seconds=%ss", final_target_seconds)
 
-    if should_loop_stitched_video:
+    if use_stream_loop_on_stitched:
         final_cmd.extend(["-stream_loop", "-1"])
 
     final_cmd.extend(
@@ -160,13 +161,6 @@ def render_video_with_ffmpeg(
             str(track_path),
         ]
     )
-    if tail_padded_seconds > 0:
-        final_cmd.extend(
-            [
-                "-vf",
-                f"tpad=stop_mode=clone:stop_duration={tail_padded_seconds}",
-            ]
-        )
     final_cmd.extend(
         [
             "-t",
@@ -198,8 +192,8 @@ def render_video_with_ffmpeg(
         concat_source_path=concat_list_path,
         planned_seconds=planned_seconds,
         final_target_seconds=final_target_seconds,
-        looped_stitched_video=should_loop_stitched_video,
-        tail_padded_seconds=tail_padded_seconds,
+        looped_stitched_video=use_stream_loop_on_stitched,
+        tail_padded_seconds=0,
     )
 
 

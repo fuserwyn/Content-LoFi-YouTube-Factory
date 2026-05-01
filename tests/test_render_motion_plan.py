@@ -81,7 +81,8 @@ def test_motion_plan_avoids_immediate_repeat_when_pool_refills() -> None:
         assert left != right
 
 
-def test_motion_plan_no_repeat_mode_uses_each_clip_once() -> None:
+def test_motion_plan_no_repeat_mode_splits_each_clip_into_segments() -> None:
+    """Unique mode uses non-overlapping time windows per file; one clip id may appear many times."""
     random.seed(13)
     clips = [_clip(1, 40), _clip(2, 40), _clip(3, 40)]
     plan = _build_motion_plan(
@@ -94,5 +95,8 @@ def test_motion_plan_no_repeat_mode_uses_each_clip_once() -> None:
     )
 
     ids = [item.clip.source_video_id for item in plan]
-    assert len(ids) == len(set(ids))  # no clip reused
-    assert len(ids) == 3
+    total = sum(item.duration_second for item in plan)
+    assert total <= 100
+    assert total >= 1
+    for left, right in zip(ids, ids[1:]):
+        assert left != right

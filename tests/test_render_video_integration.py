@@ -192,8 +192,12 @@ def test_render_video_with_ffmpeg_pads_short_video(tmp_path: Path, mocker) -> No
         allow_shorter_unique_video=True,
     )
 
-    # In no-repeat mode with short clips, tail padding may be applied
-    assert result.tail_padded_seconds >= 0
+    # Short unique montage: fill length by looping stitched video, not freeze frames
+    assert result.tail_padded_seconds == 0
+    assert result.looped_stitched_video is True
+    last_ffmpeg = mock_popen.call_args_list[-1][0][0]
+    assert "-stream_loop" in last_ffmpeg
+    assert "tpad" not in " ".join(last_ffmpeg)
 
 
 def test_render_video_with_ffmpeg_raises_on_no_clips(tmp_path: Path) -> None:
