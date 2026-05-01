@@ -118,6 +118,46 @@ def test_health_endpoint_returns_ok(tmp_path: Path, mocker) -> None:
     assert response.json()["status"] == "ok"
 
 
+def test_list_tracks_returns_sorted_paths_from_assets_tracks(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    config.assets_tracks_dir.mkdir(parents=True)
+    (config.assets_tracks_dir / "z.mp3").write_bytes(b"a")
+    (config.assets_tracks_dir / "a.mp3").write_bytes(b"a")
+    subdir = config.assets_tracks_dir / "sub"
+    subdir.mkdir()
+    (subdir / "m.wav").write_bytes(b"a")
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except Exception:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.get("/tracks")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 3
+    assert body["tracks"] == ["a.mp3", "sub/m.wav", "z.mp3"]
+    assert Path(body["tracks_dir"]).resolve() == Path(config.assets_tracks_dir).resolve()
+
+
 def test_run_endpoint_requires_auth(tmp_path: Path, mocker) -> None:
     config = _make_test_config(tmp_path)
     config.trigger_api_key = "secret_key"
@@ -544,6 +584,7 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
             "shorts_count": 2,
             "short_delay_hours": 1,
             "short_interval_hours": 7,
+            "shorts_privacy_status": "private",
         },
     )
 

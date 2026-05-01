@@ -16,6 +16,7 @@ from .main import _cleanup_temp_files, render_pexels_track_bundle, run as pipeli
 from .state_store import RunRecord, create_state_store
 from .notify_telegram import send_files_to_telegram, send_message_to_telegram
 from .poyo_video import generate_and_download_poyo_video
+from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 from .upload_youtube import upload_video
 
@@ -48,7 +49,7 @@ class PublishVideoWithShortsRequest(BaseModel):
     short_delay_hours: int = 1
     short_interval_hours: int = 7
     main_privacy_status: str = "public"
-    shorts_privacy_status: str = "private"
+    shorts_privacy_status: str = "public"
     cleanup_source_after_publish: bool = True
     cleanup_shorts_after_upload: bool = True
     clip_seconds: int | None = None
@@ -71,7 +72,7 @@ class GeneratePoyoAndPublishRequest(BaseModel):
     short_delay_hours: int = 24
     short_interval_hours: int = 24
     main_privacy_status: str = "public"
-    shorts_privacy_status: str = "private"
+    shorts_privacy_status: str = "public"
     cleanup_source_after_publish: bool = True
     cleanup_shorts_after_upload: bool = True
     clip_seconds: int | None = None
@@ -91,7 +92,7 @@ class GeneratePoyoShortsOnlyRequest(BaseModel):
     shorts_count: int = 3
     short_delay_hours: int = 24
     short_interval_hours: int = 24
-    shorts_privacy_status: str = "private"
+    shorts_privacy_status: str = "public"
     cleanup_source_after_publish: bool = True
     cleanup_shorts_after_upload: bool = True
     clip_seconds: int | None = None
@@ -115,7 +116,7 @@ class RunPublishWithShortsRequest(BaseModel):
     short_publish_offset_hours: list[float] | None = Field(default_factory=lambda: [12.0, 24.0, 40.0])
     shorts_use_main_track_thirds: bool = True
     main_privacy_status: str = "public"
-    shorts_privacy_status: str = "private"
+    shorts_privacy_status: str = "public"
     cleanup_source_after_publish: bool = True
     cleanup_shorts_after_upload: bool = True
     clip_seconds: int | None = 30
@@ -215,9 +216,9 @@ def publish_main_and_shorts_impl(
     for index, short in enumerate(shorts):
         short_publish_at = publish_base + timedelta(hours=short_hour_offsets[index])
         short_meta = VideoMeta(
-            title=f"{main_meta.title[:80]} #shorts #{index + 1}",
-            description=f"{main_meta.description}\n\nShort #{index + 1} from main release.",
-            tags=list(dict.fromkeys(main_meta.tags + ["shorts", "tiktok", "vertical"]))[:15],
+            title=f"{main_meta.title[:88]} · Short {index + 1}",
+            description=main_meta.description,
+            tags=list(dict.fromkeys(main_meta.tags + ["shorts"]))[:15],
         )
         short_upload = upload_video(
             video_path=short.output_path,
@@ -346,9 +347,9 @@ def start_trigger_server(config: AppConfig) -> None:
         for index, short in enumerate(shorts):
             short_publish_at = publish_base + timedelta(hours=short_delay_hours + (short_interval_hours * index))
             short_meta = VideoMeta(
-                title=f"{base_meta.title[:80]} #shorts #{index + 1}",
-                description=f"{base_meta.description}\n\nShort #{index + 1} generated from Poyo.",
-                tags=list(dict.fromkeys(base_meta.tags + ["shorts", "tiktok", "vertical"]))[:15],
+                title=f"{base_meta.title[:88]} · Short {index + 1}",
+                description=base_meta.description,
+                tags=list(dict.fromkeys(base_meta.tags + ["shorts"]))[:15],
             )
             upload_result = upload_video(
                 video_path=short.output_path,
@@ -404,6 +405,27 @@ def start_trigger_server(config: AppConfig) -> None:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "mode": "webhook"}
+
+    @app.get("/tracks")
+    def list_tracks(x_trigger_key: str | None = Header(default=None)) -> dict:
+        """Sorted list of audio files under the resolved tracks dir (same discovery as video rendering)."""
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+        tracks_dir = _resolve_tracks_dir(None, config)
+        paths = [
+            p
+            for p in tracks_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
+        ]
+        paths.sort(key=lambda p: p.relative_to(tracks_dir).as_posix().lower())
+        rel = [p.relative_to(tracks_dir).as_posix() for p in paths]
+        return {
+            "tracks_dir": str(tracks_dir.resolve()),
+            "count": len(rel),
+            "tracks": rel,
+        }
 
     @app.post("/run")
     def run_now(payload: RunRequest, x_trigger_key: str | None = Header(default=None)) -> dict:
