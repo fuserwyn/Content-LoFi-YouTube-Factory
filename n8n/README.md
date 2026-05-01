@@ -63,6 +63,8 @@ Set these in the n8n service:
   - Cleanup flags are enabled by default in payload:
     - `cleanup_source_after_publish=true`
     - `cleanup_shorts_after_upload=true`
+  - Missing source safety is enabled:
+    - `skip_if_source_missing=true` (workflow returns `skipped` instead of failing)
 - For the Poyo workflow:
   - Set `POYO_API_KEY` in Content Factory env (you can add later)
   - Open node `Set Poyo Input` and update `prompt`, `theme`, `track_for_metadata`

@@ -565,6 +565,45 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert not clip2.output_path.exists()
 
 
+def test_publish_video_with_shorts_skips_when_source_missing(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_upload = mocker.patch("src.trigger_server.upload_video")
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post(
+        "/publish-video-with-shorts",
+        json={
+            "source_video_path": "/storage/videos/track-99.mp4",
+            "skip_if_source_missing": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "skipped"
+    mock_upload.assert_not_called()
+
+
 def test_generate_poyo_and_publish_endpoint(tmp_path: Path, mocker) -> None:
     config = _make_test_config(tmp_path)
     config.trigger_api_key = ""

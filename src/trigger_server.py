@@ -37,6 +37,7 @@ class TikTokCutsRequest(BaseModel):
 
 class PublishVideoWithShortsRequest(BaseModel):
     source_video_path: str
+    skip_if_source_missing: bool = False
     track_for_metadata: str | None = None
     theme: str | None = None
     tags: list[str] | None = None
@@ -103,6 +104,14 @@ def start_trigger_server(config: AppConfig) -> None:
 
     def _publish_main_and_shorts(payload: PublishVideoWithShortsRequest) -> dict:
         source_video_path = _resolve_source_video_path(payload.source_video_path, config)
+        if not source_video_path.exists():
+            if payload.skip_if_source_missing:
+                return {
+                    "status": "skipped",
+                    "message": "source video missing, skipped by policy",
+                    "source_video_path": str(source_video_path),
+                }
+            raise RuntimeError(f"source video not found: {source_video_path}")
         tracks_dir = _resolve_tracks_dir(payload.tracks_dir, config)
         output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
         shorts_count = max(1, payload.shorts_count)
@@ -494,9 +503,10 @@ def start_trigger_server(config: AppConfig) -> None:
                 poll_interval_seconds=config.poyo_poll_interval_seconds,
                 max_wait_seconds=config.poyo_max_wait_seconds,
             )
+            generated_output_path = Path(str(generation_result.get("output_path", output_path)))
 
             publish_payload = PublishVideoWithShortsRequest(
-                source_video_path=str(output_path),
+                source_video_path=str(generated_output_path),
                 track_for_metadata=payload.track_for_metadata,
                 theme=payload.theme,
                 tags=payload.tags,
@@ -559,8 +569,9 @@ def start_trigger_server(config: AppConfig) -> None:
                 poll_interval_seconds=config.poyo_poll_interval_seconds,
                 max_wait_seconds=config.poyo_max_wait_seconds,
             )
+            generated_output_path = Path(str(generation_result.get("output_path", output_path)))
             shorts_result = _publish_shorts_only(
-                source_video_path=output_path,
+                source_video_path=generated_output_path,
                 track_for_metadata=payload.track_for_metadata,
                 theme=payload.theme,
                 tags=payload.tags,
