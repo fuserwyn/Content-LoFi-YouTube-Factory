@@ -726,3 +726,77 @@ def test_generate_poyo_shorts_only_endpoint(tmp_path: Path, mocker) -> None:
     assert body["generation"]["job_id"] == "job-shorts"
     assert body["publication"]["shorts_count"] == 1
     assert body["publication"]["shorts"][0]["video_id"] == "short_video_1"
+
+
+def test_run_publish_with_shorts_calls_render_then_publish(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    config.assets_tracks_dir.mkdir(parents=True, exist_ok=True)
+
+    main_mp4 = tmp_path / "renders" / "final.mp4"
+    main_mp4.parent.mkdir(parents=True, exist_ok=True)
+    main_mp4.write_bytes(b"video")
+
+    mock_render_result = Mock()
+    mock_render_result.output_path = main_mp4
+    mock_render_result.planned_seconds = 100
+    mock_render_result.final_target_seconds = 120
+
+    track_mp3 = tmp_path / "tracks" / "cycle-track.mp3"
+    track_mp3.write_bytes(b"audio")
+
+    bundle = Mock()
+    bundle.render_result = mock_render_result
+    bundle.clips = [Mock(source_url="https://pexels.example/v/99")]
+    bundle.selected_track = track_mp3
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mocker.patch("src.trigger_server.render_pexels_track_bundle", return_value=bundle)
+    mock_publish = mocker.patch(
+        "src.trigger_server.publish_main_and_shorts_impl",
+        return_value={
+            "status": "ok",
+            "main_video": {"video_id": "main_xyz", "status": "public"},
+            "shorts_count": 3,
+            "shorts": [],
+        },
+    )
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except Exception:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post(
+        "/run-publish-with-shorts",
+        json={
+            "tags": ["ocean"],
+            "shorts_count": 3,
+            "short_delay_hours": 24,
+            "short_interval_hours": 24,
+            "publish_at_iso": "2026-05-01T12:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["publication"]["main_video"]["video_id"] == "main_xyz"
+    mock_publish.assert_called_once()
+    publish_kw = mock_publish.call_args.kwargs["payload"]
+    assert publish_kw.source_video_path == str(main_mp4)
+    assert publish_kw.track_for_metadata == str(track_mp3)

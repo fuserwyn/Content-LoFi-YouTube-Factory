@@ -1,0 +1,96 @@
+{
+  "name": "Content Factory - Pexels render + main & shorts every 2 days",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "custom",
+              "cronExpression": "0 17 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger-node",
+      "name": "Daily check (runs workflow)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Align anchor once when you start the campaign; track advances every 2 calendar-day ticks.\nconst tracks = [\n  '01-example-track.mp3',\n  '02-example-track.mp3'\n];\nconst themes = ['Lake Meditation', 'Ocean Calm'];\nconst tagSets = [\n  ['nature', 'forest', 'lofi'],\n  ['ocean', 'waves', 'chill']\n];\n\nconst anchor = Date.parse('2026-01-01T00:00:00Z');\nconst now = Date.now();\nconst elapsedDays = Math.floor((now - anchor) / (24 * 60 * 60 * 1000));\n\nif (elapsedDays % 2 !== 0) {\n  return [];\n}\n\nconst cycleIndex = Math.floor(elapsedDays / 2) % tracks.length;\n\nreturn [{\n  json: {\n    track: tracks[cycleIndex],\n    allow_recent_preferred: false,\n    tags: tagSets[cycleIndex % tagSets.length],\n    theme: themes[cycleIndex % themes.length],\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 3,\n    short_delay_hours: 24,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'private',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
+      },
+      "id": "build-pexels-publish-payload",
+      "name": "Every 2 days: pick track + payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_RUN_PUBLISH_WITH_SHORTS_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "http-run-publish-with-shorts",
+      "name": "POST run-publish-with-shorts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Daily check (runs workflow)": {
+      "main": [
+        [
+          {
+            "node": "Every 2 days: pick track + payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 2 days: pick track + payload": {
+      "main": [
+        [
+          {
+            "node": "POST run-publish-with-shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
