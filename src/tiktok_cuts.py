@@ -57,8 +57,18 @@ def create_tiktok_cuts(
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     results: list[TikTokClipResult] = []
+    track_durations_cache: dict[Path, int | None] = {}
     for index, (start_second, duration_second) in enumerate(timeline):
         track_path = shuffled_tracks[index % len(shuffled_tracks)]
+        if track_path not in track_durations_cache:
+            track_durations_cache[track_path] = _probe_media_duration_seconds(track_path)
+        track_duration = track_durations_cache[track_path]
+        track_start_second = _choose_track_start_second(
+            track_duration_seconds=track_duration,
+            clip_duration_seconds=duration_second,
+            clip_index=index,
+            total_clips=len(timeline),
+        )
         output_path = output_dir / f"tiktok_{run_stamp}_{index + 1:02d}.mp4"
         _render_one_clip(
             source_video_path=source_video_path,
@@ -66,6 +76,7 @@ def create_tiktok_cuts(
             output_path=output_path,
             start_second=start_second,
             duration_second=duration_second,
+            track_start_second=track_start_second,
             width=width,
             height=height,
             fps=fps,
@@ -167,6 +178,7 @@ def _render_one_clip(
     output_path: Path,
     start_second: int,
     duration_second: int,
+    track_start_second: int,
     width: int,
     height: int,
     fps: int,
@@ -184,6 +196,8 @@ def _render_one_clip(
         str(source_video_path),
         "-stream_loop",
         "-1",
+        "-ss",
+        str(track_start_second),
         "-i",
         str(track_path),
         "-vf",
@@ -210,3 +224,28 @@ def _render_one_clip(
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg TikTok render failed: {' '.join(cmd)}\n{proc.stderr}")
+
+
+def _choose_track_start_second(
+    track_duration_seconds: int | None,
+    clip_duration_seconds: int,
+    clip_index: int,
+    total_clips: int,
+) -> int:
+    if track_duration_seconds is None:
+        return 0
+    max_start = max(0, track_duration_seconds - max(1, clip_duration_seconds))
+    if max_start == 0:
+        return 0
+    if total_clips <= 1 or clip_index <= 0:
+        return 0
+
+    # Product rule for 3 clips: 1st from start, 2nd around 2/3, 3rd around tail.
+    if total_clips == 3:
+        fractions = [0.0, 2 / 3, 1.0]
+        fraction = fractions[min(clip_index, 2)]
+        return min(max_start, max(0, int(max_start * fraction)))
+
+    # Fallback for other clip counts: spread starts across the track.
+    fraction = clip_index / max(1, total_clips - 1)
+    return min(max_start, max(0, int(max_start * fraction)))

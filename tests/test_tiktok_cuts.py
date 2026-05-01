@@ -5,6 +5,7 @@ import pytest
 
 from src.tiktok_cuts import (
     TikTokClipResult,
+    _choose_track_start_second,
     _build_timeline,
     _list_tracks,
     _probe_media_duration_seconds,
@@ -113,7 +114,8 @@ def test_create_tiktok_cuts_probes_duration(tmp_path: Path, mocker) -> None:
         crf=23,
     )
 
-    mock_probe.assert_called_once_with(source_video)
+    assert mock_probe.call_count >= 1
+    assert mock_probe.call_args_list[0].args[0] == source_video
 
 
 def test_create_tiktok_cuts_renders_all_clips(tmp_path: Path, mocker) -> None:
@@ -301,6 +303,7 @@ def test_render_one_clip_builds_correct_command(tmp_path: Path, mocker) -> None:
         output_path=output,
         start_second=10,
         duration_second=30,
+        track_start_second=20,
         width=1080,
         height=1920,
         fps=30,
@@ -314,6 +317,7 @@ def test_render_one_clip_builds_correct_command(tmp_path: Path, mocker) -> None:
     assert "10" in cmd
     assert "-t" in cmd
     assert "30" in cmd
+    assert "20" in cmd
     assert str(source_video) in cmd
     assert str(track) in cmd
     assert str(output) in cmd
@@ -336,6 +340,7 @@ def test_render_one_clip_raises_on_failure(tmp_path: Path, mocker) -> None:
             output_path=output,
             start_second=10,
             duration_second=30,
+            track_start_second=0,
             width=1080,
             height=1920,
             fps=30,
@@ -433,3 +438,10 @@ def test_create_tiktok_cuts_raises_on_probe_failure(tmp_path: Path, mocker) -> N
             encode_preset="veryfast",
             crf=23,
         )
+
+
+def test_choose_track_start_second_three_clips_offsets_from_track() -> None:
+    # max_start = 120 - 30 = 90
+    assert _choose_track_start_second(120, 30, clip_index=0, total_clips=3) == 0
+    assert _choose_track_start_second(120, 30, clip_index=1, total_clips=3) == 60
+    assert _choose_track_start_second(120, 30, clip_index=2, total_clips=3) == 90
