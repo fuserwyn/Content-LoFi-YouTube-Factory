@@ -503,6 +503,7 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
         Mock(video_id="short2", status="private"),
     ]
     mock_send_telegram = mocker.patch("src.trigger_server.send_files_to_telegram")
+    mock_send_telegram_message = mocker.patch("src.trigger_server.send_message_to_telegram")
     mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
 
     from src.trigger_server import start_trigger_server
@@ -541,9 +542,13 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert mock_upload.call_count == 3
     mock_create_cuts.assert_called_once()
     mock_send_telegram.assert_called_once()
+    mock_send_telegram_message.assert_called_once()
     first_call = mock_upload.call_args_list[0].kwargs
     second_call = mock_upload.call_args_list[1].kwargs
     assert first_call["default_privacy"] == "public"
     assert first_call["publish_at_iso"] == ""
     assert second_call["default_privacy"] == "private"
     assert second_call["publish_at_iso"] == "2026-05-01T13:00:00Z"
+    assert not source_video.exists()
+    assert not clip1.output_path.exists()
+    assert not clip2.output_path.exists()

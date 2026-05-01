@@ -20,3 +20,16 @@ def send_files_to_telegram(bot_token: str, chat_id: str, file_paths: list[Path],
                 timeout=120,
             )
         response.raise_for_status()
+
+
+def send_message_to_telegram(bot_token: str, chat_id: str, message: str) -> None:
+    if not bot_token or not chat_id or not message.strip():
+        return
+
+    api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    response = requests.post(
+        api_url,
+        data={"chat_id": chat_id, "text": message.strip()},
+        timeout=30,
+    )
+    response.raise_for_status()

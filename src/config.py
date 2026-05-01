@@ -56,6 +56,17 @@ class AppConfig:
     telegram_send_tiktok: bool
     telegram_bot_token: str
     telegram_chat_id: str
+    poyo_api_key: str
+    poyo_api_base_url: str
+    poyo_generate_path: str
+    poyo_status_path_template: str
+    poyo_download_url_field: str
+    poyo_id_field: str
+    poyo_status_field: str
+    poyo_ready_statuses: list[str]
+    poyo_failed_statuses: list[str]
+    poyo_poll_interval_seconds: int
+    poyo_max_wait_seconds: int
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -103,6 +114,16 @@ def load_config() -> AppConfig:
 
     resolved_tiktok_output_dir = Path(os.getenv("TIKTOK_OUTPUT_DIR", str(tiktok_output_dir)))
     resolved_tiktok_output_dir.mkdir(parents=True, exist_ok=True)
+    poyo_ready_statuses = [
+        item.strip().lower()
+        for item in os.getenv("POYO_READY_STATUSES", "completed,succeeded,ready").split(",")
+        if item.strip()
+    ]
+    poyo_failed_statuses = [
+        item.strip().lower()
+        for item in os.getenv("POYO_FAILED_STATUSES", "failed,error,cancelled").split(",")
+        if item.strip()
+    ]
 
     return AppConfig(
         pexels_api_key=_require_env("PEXELS_API_KEY"),
@@ -154,4 +175,15 @@ def load_config() -> AppConfig:
         telegram_send_tiktok=_parse_bool("TELEGRAM_SEND_TIKTOK", False),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+        poyo_api_key=os.getenv("POYO_API_KEY", "").strip(),
+        poyo_api_base_url=os.getenv("POYO_API_BASE_URL", "https://api.poyo.ai").strip(),
+        poyo_generate_path=os.getenv("POYO_GENERATE_PATH", "/v1/videos/generate").strip(),
+        poyo_status_path_template=os.getenv("POYO_STATUS_PATH_TEMPLATE", "/v1/videos/{job_id}").strip(),
+        poyo_download_url_field=os.getenv("POYO_DOWNLOAD_URL_FIELD", "video_url").strip(),
+        poyo_id_field=os.getenv("POYO_ID_FIELD", "id").strip(),
+        poyo_status_field=os.getenv("POYO_STATUS_FIELD", "status").strip(),
+        poyo_ready_statuses=poyo_ready_statuses,
+        poyo_failed_statuses=poyo_failed_statuses,
+        poyo_poll_interval_seconds=max(1, int(os.getenv("POYO_POLL_INTERVAL_SECONDS", "5"))),
+        poyo_max_wait_seconds=max(10, int(os.getenv("POYO_MAX_WAIT_SECONDS", "600"))),
     )

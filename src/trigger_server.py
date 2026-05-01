@@ -12,7 +12,7 @@ from .config import AppConfig
 from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
 from .main import run as pipeline_run
-from .notify_telegram import send_files_to_telegram
+from .notify_telegram import send_files_to_telegram, send_message_to_telegram
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 from .upload_youtube import upload_video
 
@@ -45,6 +45,8 @@ class PublishVideoWithShortsRequest(BaseModel):
     short_interval_hours: int = 7
     main_privacy_status: str = "public"
     shorts_privacy_status: str = "private"
+    cleanup_source_after_publish: bool = True
+    cleanup_shorts_after_upload: bool = True
     clip_seconds: int | None = None
     clip_min_seconds: int | None = None
     clip_max_seconds: int | None = None
@@ -266,6 +268,12 @@ def start_trigger_server(config: AppConfig) -> None:
                 )
 
             if config.telegram_bot_token and config.telegram_chat_id:
+                youtube_url = f"https://www.youtube.com/watch?v={main_upload.video_id}"
+                send_message_to_telegram(
+                    bot_token=config.telegram_bot_token,
+                    chat_id=config.telegram_chat_id,
+                    message=f"Main video published: {youtube_url}",
+                )
                 notify_file = source_video_path if source_video_path.exists() else None
                 if notify_file is not None:
                     send_files_to_telegram(
@@ -277,6 +285,13 @@ def start_trigger_server(config: AppConfig) -> None:
                             f"shorts={len(short_uploads)} base={publish_base.isoformat().replace('+00:00', 'Z')}"
                         ),
                     )
+
+            if payload.cleanup_shorts_after_upload:
+                for short in shorts:
+                    short.output_path.unlink(missing_ok=True)
+
+            if payload.cleanup_source_after_publish:
+                source_video_path.unlink(missing_ok=True)
 
             return {
                 "status": "ok",

@@ -55,3 +55,6 @@ Set these in the n8n service:
   - Cron runs daily, but node publishes only on every 3rd day (stable 72h cadence)
   - Main video is sent with `main_privacy_status=public` (published immediately)
   - Shorts are sent with `shorts_privacy_status=private` and scheduled at +24h, +48h, +72h
+  - Cleanup flags are enabled by default in payload:
+    - `cleanup_source_after_publish=true`
+    - `cleanup_shorts_after_upload=true`

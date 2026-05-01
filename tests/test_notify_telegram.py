@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from src.notify_telegram import send_files_to_telegram
+from src.notify_telegram import send_files_to_telegram, send_message_to_telegram
 
 
 def test_send_files_to_telegram_noop_when_empty_token(tmp_path: Path, mocker) -> None:
@@ -211,3 +211,25 @@ def test_send_files_to_telegram_includes_chat_id_in_data(tmp_path: Path, mocker)
 
     call_args = mock_post.call_args
     assert call_args[1]["data"]["chat_id"] == "987654321"
+
+
+def test_send_message_to_telegram_noop_when_empty_message(mocker) -> None:
+    mock_post = mocker.patch("src.notify_telegram.requests.post")
+
+    send_message_to_telegram(bot_token="test_token", chat_id="123456", message="   ")
+
+    mock_post.assert_not_called()
+
+
+def test_send_message_to_telegram_posts_text(mocker) -> None:
+    mock_response = mocker.Mock()
+    mock_response.raise_for_status = mocker.Mock()
+    mock_post = mocker.patch("src.notify_telegram.requests.post", return_value=mock_response)
+
+    send_message_to_telegram(bot_token="test_token", chat_id="123456", message="Hello")
+
+    mock_post.assert_called_once()
+    call_args = mock_post.call_args
+    assert call_args[0][0] == "https://api.telegram.org/bottest_token/sendMessage"
+    assert call_args[1]["data"]["chat_id"] == "123456"
+    assert call_args[1]["data"]["text"] == "Hello"
