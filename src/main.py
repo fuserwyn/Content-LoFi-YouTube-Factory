@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 import shutil
 import subprocess
 import traceback
+from typing import Any
 
-from .config import load_config
-from .fetch_assets import fetch_and_download_clips, load_local_clips
+from .config import AppConfig, load_config
+from .fetch_assets import ClipAsset, fetch_and_download_clips, load_local_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
 from .notify_n8n import send_run_notification
 from .notify_telegram import send_files_to_telegram
-from .render_video import render_video_with_ffmpeg
+from .render_video import RenderResult, render_video_with_ffmpeg
 from .select_track import choose_track
-from .state_store import RunRecord, create_state_store
+from .state_store import RunRecord, StateStore, create_state_store
 from .tiktok_cuts import create_tiktok_cuts
 from .upload_youtube import upload_video
 
@@ -67,6 +68,116 @@ def _probe_audio_duration_seconds(audio_path: Path) -> int | None:
         return None
 
 
+@dataclass(frozen=True)
+class PexelsRenderBundle:
+    render_result: RenderResult
+    clips: list[ClipAsset]
+    selected_track: Path
+    effective_tags: list[str]
+    target_duration_seconds: int
+    track_debug: dict[str, Any]
+
+
+def render_pexels_track_bundle(
+    *,
+    config: AppConfig,
+    store: StateStore,
+    logger: Any,
+    effective_tags: list[str],
+    preferred_track: str | None,
+    allow_recent_preferred: bool,
+) -> PexelsRenderBundle:
+    """Fetch clips (Pexels or local), pick track, render final MP4 — shared by CLI run and webhook."""
+    recent_tracks = set(store.recent_tracks(config.max_recent_track_lookback))
+    recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
+
+    track_debug: dict[str, Any] = {}
+    try:
+        track_files = [p.as_posix() for p in config.assets_tracks_dir.rglob("*") if p.is_file()]
+        logger.info(
+            "TRACK_DEBUG: assets/tracks visible files count=%d sample=%s",
+            len(track_files),
+            track_files[:5],
+        )
+        track_debug = {"count": len(track_files), "sample": track_files[:5]}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TRACK_DEBUG: failed to snapshot tracks_dir: %s", exc)
+
+    clips: list[ClipAsset] = []
+    if config.use_local_videos_only:
+        logger.info("FETCH: loading clips from local source videos")
+        clips = load_local_clips(
+            source_dir=config.assets_source_videos_dir,
+            max_clips=config.max_clips_per_run,
+            min_clip_seconds=config.min_clip_seconds,
+            min_width=config.target_width,
+            min_height=config.target_height,
+            recently_used_clip_urls=recent_clips,
+        )
+        if not clips and config.local_videos_fallback_to_pexels:
+            logger.info("FETCH: local clips unavailable, falling back to Pexels")
+
+    if (not clips) and (not config.use_local_videos_only or config.local_videos_fallback_to_pexels):
+        logger.info("FETCH: requesting clips from Pexels")
+        clips = fetch_and_download_clips(
+            api_key=config.pexels_api_key,
+            tags=effective_tags,
+            output_dir=config.temp_clips_dir,
+            max_clips=config.max_clips_per_run,
+            min_clip_seconds=config.min_clip_seconds,
+            min_width=config.target_width,
+            min_height=config.target_height,
+            recently_used_clip_urls=recent_clips,
+            per_page=config.pexels_per_page,
+            pages_per_tag=config.pexels_pages_per_tag,
+        )
+    if not clips:
+        raise RuntimeError("No valid clips available from local source videos or Pexels.")
+
+    logger.info("TRACK_SELECT: selecting music track")
+    selected_track = choose_track(
+        config.assets_tracks_dir,
+        recent_tracks,
+        preferred_track=preferred_track,
+        allow_recent_preferred=allow_recent_preferred,
+    )
+    target_duration_seconds = config.target_duration_min * 60
+    if config.match_video_duration_to_track:
+        track_duration = _probe_audio_duration_seconds(selected_track)
+        if track_duration is not None:
+            target_duration_seconds = track_duration
+            logger.info("RENDER: matched duration to track length=%ss", track_duration)
+        else:
+            logger.warning(
+                "RENDER: failed to probe track duration, fallback to TARGET_DURATION_MIN=%s",
+                config.target_duration_min,
+            )
+
+    logger.info("RENDER: composing final video with FFmpeg")
+    render_result = render_video_with_ffmpeg(
+        clips=clips,
+        track_path=selected_track,
+        output_dir=config.temp_renders_dir,
+        target_duration_seconds=target_duration_seconds,
+        width=config.target_width,
+        height=config.target_height,
+        fps=config.fps,
+        encode_preset=config.render_preset,
+        crf=config.render_crf,
+        no_repeat_clips_in_single_video=config.no_repeat_clips_in_single_video,
+        allow_shorter_unique_video=config.allow_shorter_unique_video,
+    )
+
+    return PexelsRenderBundle(
+        render_result=render_result,
+        clips=clips,
+        selected_track=selected_track,
+        effective_tags=effective_tags,
+        target_duration_seconds=target_duration_seconds,
+        track_debug=track_debug,
+    )
+
+
 def run(
     preferred_track: str | None = None,
     allow_recent_preferred: bool = False,
@@ -95,91 +206,21 @@ def run(
     youtube_video_id = ""
 
     try:
-        recent_tracks = set(store.recent_tracks(config.max_recent_track_lookback))
-        recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
-
-        # Debug volume mount: helps verify container can "see" tracks.
-        try:
-            track_files = [p.as_posix() for p in config.assets_tracks_dir.rglob("*") if p.is_file()]
-            logger.info(
-                "TRACK_DEBUG: assets/tracks visible files count=%d sample=%s",
-                len(track_files),
-                track_files[:5],
-            )
-            report_payload["track_debug"] = {
-                "count": len(track_files),
-                "sample": track_files[:5],
-            }
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("TRACK_DEBUG: failed to snapshot tracks_dir: %s", exc)
-
-        clips = []
-        if config.use_local_videos_only:
-            logger.info("FETCH: loading clips from local source videos")
-            clips = load_local_clips(
-                source_dir=config.assets_source_videos_dir,
-                max_clips=config.max_clips_per_run,
-                min_clip_seconds=config.min_clip_seconds,
-                min_width=config.target_width,
-                min_height=config.target_height,
-                recently_used_clip_urls=recent_clips,
-            )
-            if not clips and config.local_videos_fallback_to_pexels:
-                logger.info("FETCH: local clips unavailable, falling back to Pexels")
-
-        if (not clips) and (not config.use_local_videos_only or config.local_videos_fallback_to_pexels):
-            logger.info("FETCH: requesting clips from Pexels")
-            clips = fetch_and_download_clips(
-                api_key=config.pexels_api_key,
-                tags=effective_tags,
-                output_dir=config.temp_clips_dir,
-                max_clips=config.max_clips_per_run,
-                min_clip_seconds=config.min_clip_seconds,
-                min_width=config.target_width,
-                min_height=config.target_height,
-                recently_used_clip_urls=recent_clips,
-                per_page=config.pexels_per_page,
-                pages_per_tag=config.pexels_pages_per_tag,
-            )
-        if not clips:
-            raise RuntimeError("No valid clips available from local source videos or Pexels.")
-
-        logger.info("TRACK_SELECT: selecting music track")
-        selected_track = choose_track(
-            config.assets_tracks_dir,
-            recent_tracks,
+        bundle = render_pexels_track_bundle(
+            config=config,
+            store=store,
+            logger=logger,
+            effective_tags=effective_tags,
             preferred_track=preferred_track,
             allow_recent_preferred=allow_recent_preferred,
         )
+        clips = bundle.clips
+        selected_track = bundle.selected_track
+        render_result = bundle.render_result
         track_path = str(selected_track)
-        target_duration_seconds = config.target_duration_min * 60
-        if config.match_video_duration_to_track:
-            track_duration = _probe_audio_duration_seconds(selected_track)
-            if track_duration is not None:
-                target_duration_seconds = track_duration
-                logger.info("RENDER: matched duration to track length=%ss", track_duration)
-            else:
-                logger.warning(
-                    "RENDER: failed to probe track duration, fallback to TARGET_DURATION_MIN=%s",
-                    config.target_duration_min,
-                )
-        report_payload["target_duration_seconds"] = target_duration_seconds
-
-        logger.info("RENDER: composing final video with FFmpeg")
-        render_result = render_video_with_ffmpeg(
-            clips=clips,
-            track_path=selected_track,
-            output_dir=config.temp_renders_dir,
-            target_duration_seconds=target_duration_seconds,
-            width=config.target_width,
-            height=config.target_height,
-            fps=config.fps,
-            encode_preset=config.render_preset,
-            crf=config.render_crf,
-            no_repeat_clips_in_single_video=config.no_repeat_clips_in_single_video,
-            allow_shorter_unique_video=config.allow_shorter_unique_video,
-        )
         output_path = str(render_result.output_path)
+        report_payload["track_debug"] = bundle.track_debug
+        report_payload["target_duration_seconds"] = bundle.target_duration_seconds
         report_payload["render"] = {
             "planned_seconds": render_result.planned_seconds,
             "final_target_seconds": render_result.final_target_seconds,
