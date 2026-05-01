@@ -13,7 +13,7 @@
         }
       },
       "id": "cron-trigger-node",
-      "name": "Daily at 20:00 Kyiv",
+      "name": "Daily at 20:00 Moscow",
       "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
       "position": [
@@ -67,7 +67,7 @@
     }
   ],
   "connections": {
-    "Daily at 20:00 Kyiv": {
+    "Daily at 20:00 Moscow": {
       "main": [
         [
           {
