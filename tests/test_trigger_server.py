@@ -59,6 +59,17 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         telegram_send_tiktok=False,
         telegram_bot_token="",
         telegram_chat_id="",
+        poyo_api_key="",
+        poyo_api_base_url="https://api.poyo.ai",
+        poyo_generate_path="/v1/videos/generate",
+        poyo_status_path_template="/v1/videos/{job_id}",
+        poyo_download_url_field="video_url",
+        poyo_id_field="id",
+        poyo_status_field="status",
+        poyo_ready_statuses=["completed", "ready"],
+        poyo_failed_statuses=["failed", "error"],
+        poyo_poll_interval_seconds=1,
+        poyo_max_wait_seconds=60,
     )
 
 
@@ -552,3 +563,127 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert not source_video.exists()
     assert not clip1.output_path.exists()
     assert not clip2.output_path.exists()
+
+
+def test_generate_poyo_and_publish_endpoint(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    config.poyo_api_key = "poyo-key"
+    config.telegram_bot_token = "token"
+    config.telegram_chat_id = "chat"
+    config.assets_tracks_dir.mkdir(parents=True, exist_ok=True)
+
+    generated_video = tmp_path / "generated.mp4"
+    generated_video.write_bytes(b"video")
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_generate = mocker.patch("src.trigger_server.generate_and_download_poyo_video")
+    mock_generate.return_value = {
+        "job_id": "job123",
+        "video_url": "https://cdn.example/video.mp4",
+        "output_path": str(generated_video),
+    }
+    mock_create_cuts = mocker.patch("src.trigger_server.create_tiktok_cuts")
+    clip1 = Mock(output_path=tmp_path / "short1.mp4", track_path=tmp_path / "t1.mp3", start_second=0, duration_second=30)
+    clip1.output_path.write_bytes(b"video")
+    mock_create_cuts.return_value = [clip1]
+    mock_upload = mocker.patch("src.trigger_server.upload_video")
+    mock_upload.side_effect = [Mock(video_id="main123", status="public"), Mock(video_id="short1", status="private")]
+    mocker.patch("src.trigger_server.send_files_to_telegram")
+    mocker.patch("src.trigger_server.send_message_to_telegram")
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post(
+        "/generate-poyo-and-publish",
+        json={
+            "poyo_payload": {"prompt": "lofi beach sunset"},
+            "shorts_count": 1,
+            "publish_at_iso": "2026-05-01T12:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["generation"]["job_id"] == "job123"
+    assert response.json()["publication"]["main_video"]["video_id"] == "main123"
+    mock_generate.assert_called_once()
+
+
+def test_generate_poyo_shorts_only_endpoint(tmp_path: Path, mocker) -> None:
+    config = _make_test_config(tmp_path)
+    config.trigger_api_key = ""
+    config.poyo_api_key = "poyo-key"
+    config.telegram_bot_token = "token"
+    config.telegram_chat_id = "chat"
+    config.assets_tracks_dir.mkdir(parents=True, exist_ok=True)
+
+    generated_video = tmp_path / "generated-shorts.mp4"
+    generated_video.write_bytes(b"video")
+
+    mocker.patch("src.trigger_server.setup_logger")
+    mock_generate = mocker.patch("src.trigger_server.generate_and_download_poyo_video")
+    mock_generate.return_value = {
+        "job_id": "job-shorts",
+        "video_url": "https://cdn.example/video.mp4",
+        "output_path": str(generated_video),
+    }
+    mock_create_cuts = mocker.patch("src.trigger_server.create_tiktok_cuts")
+    clip1 = Mock(output_path=tmp_path / "short-only-1.mp4", track_path=tmp_path / "t1.mp3", start_second=0, duration_second=30)
+    clip1.output_path.write_bytes(b"video")
+    mock_create_cuts.return_value = [clip1]
+    mock_upload = mocker.patch("src.trigger_server.upload_video")
+    mock_upload.return_value = Mock(video_id="short_video_1", status="private")
+    mocker.patch("src.trigger_server.send_message_to_telegram")
+    mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
+
+    from src.trigger_server import start_trigger_server
+
+    captured_app = None
+
+    def capture_app(app, **kwargs):
+        nonlocal captured_app
+        captured_app = app
+
+    mock_uvicorn.side_effect = capture_app
+
+    try:
+        start_trigger_server(config)
+    except:
+        pass
+
+    if captured_app is None:
+        pytest.skip("Could not capture FastAPI app")
+
+    client = TestClient(captured_app)
+    response = client.post(
+        "/generate-poyo-shorts-only",
+        json={
+            "poyo_payload": {"prompt": "lofi city rain"},
+            "shorts_count": 1,
+            "publish_at_iso": "2026-05-01T12:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["generation"]["job_id"] == "job-shorts"
+    assert body["publication"]["shorts_count"] == 1
+    assert body["publication"]["shorts"][0]["video_id"] == "short_video_1"

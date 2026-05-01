@@ -1,0 +1,133 @@
+{
+  "name": "Content Factory - Poyo Shorts Test",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "prompt",
+              "name": "prompt",
+              "value": "Lo-fi hip hop rainy city at night, cinematic, no text, no watermark",
+              "type": "string"
+            },
+            {
+              "id": "theme",
+              "name": "theme",
+              "value": "Rainy City Night",
+              "type": "string"
+            },
+            {
+              "id": "track-for-metadata",
+              "name": "track_for_metadata",
+              "value": "03 - Sea.mp3",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-test-input-node",
+      "name": "Set Test Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{\n  json: {\n    poyo_payload: {\n      prompt: $json.prompt\n    },\n    output_filename: 'poyo-shorts-test.mp4',\n    track_for_metadata: $json.track_for_metadata,\n    theme: $json.theme,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 1,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    shorts_privacy_status: 'public',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
+      },
+      "id": "build-test-payload-node",
+      "name": "Build Poyo Shorts Test Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_POYO_SHORTS_ONLY_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "http-request-node",
+      "name": "Run Poyo Shorts Test",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Test Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Test Input": {
+      "main": [
+        [
+          {
+            "node": "Build Poyo Shorts Test Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Poyo Shorts Test Payload": {
+      "main": [
+        [
+          {
+            "node": "Run Poyo Shorts Test",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}

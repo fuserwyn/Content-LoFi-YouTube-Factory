@@ -13,6 +13,7 @@ from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
 from .main import run as pipeline_run
 from .notify_telegram import send_files_to_telegram, send_message_to_telegram
+from .poyo_video import generate_and_download_poyo_video
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 from .upload_youtube import upload_video
 
@@ -54,10 +55,288 @@ class PublishVideoWithShortsRequest(BaseModel):
     output_dir: str | None = None
 
 
+class GeneratePoyoAndPublishRequest(BaseModel):
+    poyo_payload: dict
+    output_filename: str | None = None
+    track_for_metadata: str | None = None
+    theme: str | None = None
+    tags: list[str] | None = None
+    publish_at_iso: str | None = None
+    shorts_count: int = 3
+    short_delay_hours: int = 24
+    short_interval_hours: int = 24
+    main_privacy_status: str = "public"
+    shorts_privacy_status: str = "private"
+    cleanup_source_after_publish: bool = True
+    cleanup_shorts_after_upload: bool = True
+    clip_seconds: int | None = None
+    clip_min_seconds: int | None = None
+    clip_max_seconds: int | None = None
+    tracks_dir: str | None = None
+    output_dir: str | None = None
+
+
+class GeneratePoyoShortsOnlyRequest(BaseModel):
+    poyo_payload: dict
+    output_filename: str | None = None
+    track_for_metadata: str | None = None
+    theme: str | None = None
+    tags: list[str] | None = None
+    publish_at_iso: str | None = None
+    shorts_count: int = 3
+    short_delay_hours: int = 24
+    short_interval_hours: int = 24
+    shorts_privacy_status: str = "private"
+    cleanup_source_after_publish: bool = True
+    cleanup_shorts_after_upload: bool = True
+    clip_seconds: int | None = None
+    clip_min_seconds: int | None = None
+    clip_max_seconds: int | None = None
+    tracks_dir: str | None = None
+    output_dir: str | None = None
+
+
 def start_trigger_server(config: AppConfig) -> None:
     logger = setup_logger()
     app = FastAPI()
     run_lock = threading.Lock()
+
+    def _publish_main_and_shorts(payload: PublishVideoWithShortsRequest) -> dict:
+        source_video_path = _resolve_source_video_path(payload.source_video_path, config)
+        tracks_dir = _resolve_tracks_dir(payload.tracks_dir, config)
+        output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
+        shorts_count = max(1, payload.shorts_count)
+        clip_seconds = config.tiktok_clip_seconds if payload.clip_seconds is None else payload.clip_seconds
+
+        publish_base = _parse_publish_datetime(payload.publish_at_iso)
+        logger.info(
+            "TRIGGER: publish-video-with-shorts requested | source=%s publish_at=%s shorts_count=%s short_delay_hours=%s short_interval_hours=%s",
+            source_video_path,
+            publish_base.isoformat(),
+            shorts_count,
+            payload.short_delay_hours,
+            payload.short_interval_hours,
+        )
+
+        tags_seed = payload.tags or config.content_tags
+        track_for_meta = payload.track_for_metadata
+        if track_for_meta:
+            track_path = _resolve_source_video_path(track_for_meta, config)
+        else:
+            track_path = source_video_path
+        main_meta = generate_metadata(track_path, tags_seed, theme=payload.theme)
+        main_upload = upload_video(
+            video_path=source_video_path,
+            meta=main_meta,
+            client_id=config.youtube_client_id,
+            client_secret=config.youtube_client_secret,
+            refresh_token=config.youtube_refresh_token,
+            default_privacy=payload.main_privacy_status,
+            category_id=config.youtube_category_id,
+            default_language=config.youtube_default_language,
+            publish_at_iso=(
+                publish_base.isoformat().replace("+00:00", "Z")
+                if payload.main_privacy_status == "private"
+                else ""
+            ),
+        )
+
+        shorts = create_tiktok_cuts(
+            source_video_path=source_video_path,
+            tracks_dir=tracks_dir,
+            output_dir=output_dir,
+            clips_count=shorts_count,
+            clip_seconds=max(5, clip_seconds),
+            width=config.tiktok_width,
+            height=config.tiktok_height,
+            fps=config.fps,
+            encode_preset=config.render_preset,
+            crf=config.render_crf,
+            clip_min_seconds=max(5, payload.clip_min_seconds) if payload.clip_min_seconds is not None else None,
+            clip_max_seconds=max(5, payload.clip_max_seconds) if payload.clip_max_seconds is not None else None,
+        )
+
+        short_uploads: list[dict] = []
+        for index, short in enumerate(shorts):
+            short_publish_at = publish_base + timedelta(
+                hours=payload.short_delay_hours + (payload.short_interval_hours * index)
+            )
+            short_meta = VideoMeta(
+                title=f"{main_meta.title[:80]} #shorts #{index + 1}",
+                description=f"{main_meta.description}\n\nShort #{index + 1} from main release.",
+                tags=list(dict.fromkeys(main_meta.tags + ["shorts", "tiktok", "vertical"]))[:15],
+            )
+            short_upload = upload_video(
+                video_path=short.output_path,
+                meta=short_meta,
+                client_id=config.youtube_client_id,
+                client_secret=config.youtube_client_secret,
+                refresh_token=config.youtube_refresh_token,
+                default_privacy=payload.shorts_privacy_status,
+                category_id=config.youtube_category_id,
+                default_language=config.youtube_default_language,
+                publish_at_iso=(
+                    short_publish_at.isoformat().replace("+00:00", "Z")
+                    if payload.shorts_privacy_status == "private"
+                    else ""
+                ),
+            )
+            short_uploads.append(
+                {
+                    "video_id": short_upload.video_id,
+                    "status": short_upload.status,
+                    "path": str(short.output_path),
+                    "publish_at_iso": short_publish_at.isoformat().replace("+00:00", "Z"),
+                    "start_second": short.start_second,
+                    "duration_second": short.duration_second,
+                }
+            )
+
+        if config.telegram_bot_token and config.telegram_chat_id:
+            youtube_url = f"https://www.youtube.com/watch?v={main_upload.video_id}"
+            send_message_to_telegram(
+                bot_token=config.telegram_bot_token,
+                chat_id=config.telegram_chat_id,
+                message=f"Main video published: {youtube_url}",
+            )
+            notify_file = source_video_path if source_video_path.exists() else None
+            if notify_file is not None:
+                send_files_to_telegram(
+                    bot_token=config.telegram_bot_token,
+                    chat_id=config.telegram_chat_id,
+                    file_paths=[notify_file],
+                    caption_prefix=(
+                        f"Published main={main_upload.video_id} "
+                        f"shorts={len(short_uploads)} base={publish_base.isoformat().replace('+00:00', 'Z')}"
+                    ),
+                )
+
+        if payload.cleanup_shorts_after_upload:
+            for short in shorts:
+                short.output_path.unlink(missing_ok=True)
+
+        if payload.cleanup_source_after_publish:
+            source_video_path.unlink(missing_ok=True)
+
+        return {
+            "status": "ok",
+            "message": "main video and shorts uploaded",
+            "main_video": {
+                "video_id": main_upload.video_id,
+                "status": main_upload.status,
+                "path": str(source_video_path),
+                "publish_at_iso": publish_base.isoformat().replace("+00:00", "Z"),
+            },
+            "shorts_count": len(short_uploads),
+            "shorts": short_uploads,
+            "schedule": {
+                "short_delay_hours": payload.short_delay_hours,
+                "short_interval_hours": payload.short_interval_hours,
+            },
+        }
+
+    def _publish_shorts_only(
+        *,
+        source_video_path: Path,
+        track_for_metadata: str | None,
+        theme: str | None,
+        tags: list[str] | None,
+        publish_at_iso: str | None,
+        shorts_count: int,
+        short_delay_hours: int,
+        short_interval_hours: int,
+        shorts_privacy_status: str,
+        cleanup_source_after_publish: bool,
+        cleanup_shorts_after_upload: bool,
+        clip_seconds: int | None,
+        clip_min_seconds: int | None,
+        clip_max_seconds: int | None,
+        tracks_dir_raw: str | None,
+        output_dir_raw: str | None,
+    ) -> dict:
+        tracks_dir = _resolve_tracks_dir(tracks_dir_raw, config)
+        output_dir = _resolve_path(output_dir_raw, config.tiktok_output_dir)
+        clips_target = max(1, shorts_count)
+        effective_clip_seconds = config.tiktok_clip_seconds if clip_seconds is None else clip_seconds
+        publish_base = _parse_publish_datetime(publish_at_iso)
+        tags_seed = tags or config.content_tags
+
+        meta_track_path = _resolve_source_video_path(track_for_metadata, config) if track_for_metadata else source_video_path
+        base_meta = generate_metadata(meta_track_path, tags_seed, theme=theme)
+
+        shorts = create_tiktok_cuts(
+            source_video_path=source_video_path,
+            tracks_dir=tracks_dir,
+            output_dir=output_dir,
+            clips_count=clips_target,
+            clip_seconds=max(5, effective_clip_seconds),
+            width=config.tiktok_width,
+            height=config.tiktok_height,
+            fps=config.fps,
+            encode_preset=config.render_preset,
+            crf=config.render_crf,
+            clip_min_seconds=max(5, clip_min_seconds) if clip_min_seconds is not None else None,
+            clip_max_seconds=max(5, clip_max_seconds) if clip_max_seconds is not None else None,
+        )
+
+        uploaded_shorts: list[dict] = []
+        for index, short in enumerate(shorts):
+            short_publish_at = publish_base + timedelta(hours=short_delay_hours + (short_interval_hours * index))
+            short_meta = VideoMeta(
+                title=f"{base_meta.title[:80]} #shorts #{index + 1}",
+                description=f"{base_meta.description}\n\nShort #{index + 1} generated from Poyo.",
+                tags=list(dict.fromkeys(base_meta.tags + ["shorts", "tiktok", "vertical"]))[:15],
+            )
+            upload_result = upload_video(
+                video_path=short.output_path,
+                meta=short_meta,
+                client_id=config.youtube_client_id,
+                client_secret=config.youtube_client_secret,
+                refresh_token=config.youtube_refresh_token,
+                default_privacy=shorts_privacy_status,
+                category_id=config.youtube_category_id,
+                default_language=config.youtube_default_language,
+                publish_at_iso=(
+                    short_publish_at.isoformat().replace("+00:00", "Z")
+                    if shorts_privacy_status == "private"
+                    else ""
+                ),
+            )
+            short_url = f"https://www.youtube.com/watch?v={upload_result.video_id}"
+            uploaded_shorts.append(
+                {
+                    "video_id": upload_result.video_id,
+                    "status": upload_result.status,
+                    "youtube_url": short_url,
+                    "path": str(short.output_path),
+                    "publish_at_iso": short_publish_at.isoformat().replace("+00:00", "Z"),
+                    "start_second": short.start_second,
+                    "duration_second": short.duration_second,
+                }
+            )
+            if config.telegram_bot_token and config.telegram_chat_id:
+                send_message_to_telegram(
+                    bot_token=config.telegram_bot_token,
+                    chat_id=config.telegram_chat_id,
+                    message=f"Short published/scheduled: {short_url}",
+                )
+
+        if cleanup_shorts_after_upload:
+            for short in shorts:
+                short.output_path.unlink(missing_ok=True)
+        if cleanup_source_after_publish:
+            source_video_path.unlink(missing_ok=True)
+
+        return {
+            "status": "ok",
+            "message": "shorts uploaded",
+            "shorts_count": len(uploaded_shorts),
+            "shorts": uploaded_shorts,
+            "schedule": {
+                "short_delay_hours": short_delay_hours,
+                "short_interval_hours": short_interval_hours,
+            },
+        }
 
     @app.get("/health")
     def health() -> dict:
@@ -177,140 +456,136 @@ def start_trigger_server(config: AppConfig) -> None:
             raise HTTPException(status_code=409, detail="run already in progress")
 
         try:
-            source_video_path = _resolve_source_video_path(payload.source_video_path, config)
-            tracks_dir = _resolve_tracks_dir(payload.tracks_dir, config)
-            output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
-            shorts_count = max(1, payload.shorts_count)
-            clip_seconds = config.tiktok_clip_seconds if payload.clip_seconds is None else payload.clip_seconds
+            return _publish_main_and_shorts(payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("TRIGGER: publish-video-with-shorts failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+        finally:
+            run_lock.release()
 
-            publish_base = _parse_publish_datetime(payload.publish_at_iso)
-            logger.info(
-                "TRIGGER: publish-video-with-shorts requested | source=%s publish_at=%s shorts_count=%s short_delay_hours=%s short_interval_hours=%s",
-                source_video_path,
-                publish_base.isoformat(),
-                shorts_count,
-                payload.short_delay_hours,
-                payload.short_interval_hours,
+    @app.post("/generate-poyo-and-publish")
+    def generate_poyo_and_publish(
+        payload: GeneratePoyoAndPublishRequest,
+        x_trigger_key: str | None = Header(default=None),
+    ) -> dict:
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+        if not run_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="run already in progress")
+
+        try:
+            output_name = (payload.output_filename or f"poyo_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.mp4").strip()
+            output_path = (config.data_dir / "poyo_generated" / output_name).resolve()
+
+            generation_result = generate_and_download_poyo_video(
+                api_key=config.poyo_api_key,
+                base_url=config.poyo_api_base_url,
+                generate_path=config.poyo_generate_path,
+                status_path_template=config.poyo_status_path_template,
+                payload=payload.poyo_payload,
+                output_path=output_path,
+                id_field=config.poyo_id_field,
+                status_field=config.poyo_status_field,
+                download_url_field=config.poyo_download_url_field,
+                ready_statuses=config.poyo_ready_statuses,
+                failed_statuses=config.poyo_failed_statuses,
+                poll_interval_seconds=config.poyo_poll_interval_seconds,
+                max_wait_seconds=config.poyo_max_wait_seconds,
             )
 
-            tags_seed = payload.tags or config.content_tags
-            track_for_meta = payload.track_for_metadata
-            if track_for_meta:
-                track_path = _resolve_source_video_path(track_for_meta, config)
-            else:
-                track_path = source_video_path
-            main_meta = generate_metadata(track_path, tags_seed, theme=payload.theme)
-            main_upload = upload_video(
-                video_path=source_video_path,
-                meta=main_meta,
-                client_id=config.youtube_client_id,
-                client_secret=config.youtube_client_secret,
-                refresh_token=config.youtube_refresh_token,
-                default_privacy=payload.main_privacy_status,
-                category_id=config.youtube_category_id,
-                default_language=config.youtube_default_language,
-                publish_at_iso=(
-                    publish_base.isoformat().replace("+00:00", "Z")
-                    if payload.main_privacy_status == "private"
-                    else ""
-                ),
+            publish_payload = PublishVideoWithShortsRequest(
+                source_video_path=str(output_path),
+                track_for_metadata=payload.track_for_metadata,
+                theme=payload.theme,
+                tags=payload.tags,
+                publish_at_iso=payload.publish_at_iso,
+                shorts_count=payload.shorts_count,
+                short_delay_hours=payload.short_delay_hours,
+                short_interval_hours=payload.short_interval_hours,
+                main_privacy_status=payload.main_privacy_status,
+                shorts_privacy_status=payload.shorts_privacy_status,
+                cleanup_source_after_publish=payload.cleanup_source_after_publish,
+                cleanup_shorts_after_upload=payload.cleanup_shorts_after_upload,
+                clip_seconds=payload.clip_seconds,
+                clip_min_seconds=payload.clip_min_seconds,
+                clip_max_seconds=payload.clip_max_seconds,
+                tracks_dir=payload.tracks_dir,
+                output_dir=payload.output_dir,
             )
-
-            shorts = create_tiktok_cuts(
-                source_video_path=source_video_path,
-                tracks_dir=tracks_dir,
-                output_dir=output_dir,
-                clips_count=shorts_count,
-                clip_seconds=max(5, clip_seconds),
-                width=config.tiktok_width,
-                height=config.tiktok_height,
-                fps=config.fps,
-                encode_preset=config.render_preset,
-                crf=config.render_crf,
-                clip_min_seconds=max(5, payload.clip_min_seconds) if payload.clip_min_seconds is not None else None,
-                clip_max_seconds=max(5, payload.clip_max_seconds) if payload.clip_max_seconds is not None else None,
-            )
-
-            short_uploads: list[dict] = []
-            for index, short in enumerate(shorts):
-                short_publish_at = publish_base + timedelta(
-                    hours=payload.short_delay_hours + (payload.short_interval_hours * index)
-                )
-                short_meta = VideoMeta(
-                    title=f"{main_meta.title[:80]} #shorts #{index + 1}",
-                    description=f"{main_meta.description}\n\nShort #{index + 1} from main release.",
-                    tags=list(dict.fromkeys(main_meta.tags + ["shorts", "tiktok", "vertical"]))[:15],
-                )
-                short_upload = upload_video(
-                    video_path=short.output_path,
-                    meta=short_meta,
-                    client_id=config.youtube_client_id,
-                    client_secret=config.youtube_client_secret,
-                    refresh_token=config.youtube_refresh_token,
-                    default_privacy=payload.shorts_privacy_status,
-                    category_id=config.youtube_category_id,
-                    default_language=config.youtube_default_language,
-                    publish_at_iso=(
-                        short_publish_at.isoformat().replace("+00:00", "Z")
-                        if payload.shorts_privacy_status == "private"
-                        else ""
-                    ),
-                )
-                short_uploads.append(
-                    {
-                        "video_id": short_upload.video_id,
-                        "status": short_upload.status,
-                        "path": str(short.output_path),
-                        "publish_at_iso": short_publish_at.isoformat().replace("+00:00", "Z"),
-                        "start_second": short.start_second,
-                        "duration_second": short.duration_second,
-                    }
-                )
-
-            if config.telegram_bot_token and config.telegram_chat_id:
-                youtube_url = f"https://www.youtube.com/watch?v={main_upload.video_id}"
-                send_message_to_telegram(
-                    bot_token=config.telegram_bot_token,
-                    chat_id=config.telegram_chat_id,
-                    message=f"Main video published: {youtube_url}",
-                )
-                notify_file = source_video_path if source_video_path.exists() else None
-                if notify_file is not None:
-                    send_files_to_telegram(
-                        bot_token=config.telegram_bot_token,
-                        chat_id=config.telegram_chat_id,
-                        file_paths=[notify_file],
-                        caption_prefix=(
-                            f"Published main={main_upload.video_id} "
-                            f"shorts={len(short_uploads)} base={publish_base.isoformat().replace('+00:00', 'Z')}"
-                        ),
-                    )
-
-            if payload.cleanup_shorts_after_upload:
-                for short in shorts:
-                    short.output_path.unlink(missing_ok=True)
-
-            if payload.cleanup_source_after_publish:
-                source_video_path.unlink(missing_ok=True)
+            publish_result = _publish_main_and_shorts(publish_payload)
 
             return {
                 "status": "ok",
-                "message": "main video and shorts uploaded",
-                "main_video": {
-                    "video_id": main_upload.video_id,
-                    "status": main_upload.status,
-                    "path": str(source_video_path),
-                    "publish_at_iso": publish_base.isoformat().replace("+00:00", "Z"),
-                },
-                "shorts_count": len(short_uploads),
-                "shorts": short_uploads,
-                "schedule": {
-                    "short_delay_hours": payload.short_delay_hours,
-                    "short_interval_hours": payload.short_interval_hours,
-                },
+                "message": "poyo generated and published",
+                "generation": generation_result,
+                "publication": publish_result,
             }
         except Exception as exc:  # noqa: BLE001
-            logger.exception("TRIGGER: publish-video-with-shorts failed: %s", exc)
+            logger.exception("TRIGGER: generate-poyo-and-publish failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+        finally:
+            run_lock.release()
+
+    @app.post("/generate-poyo-shorts-only")
+    def generate_poyo_shorts_only(
+        payload: GeneratePoyoShortsOnlyRequest,
+        x_trigger_key: str | None = Header(default=None),
+    ) -> dict:
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+        if not run_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="run already in progress")
+
+        try:
+            output_name = (payload.output_filename or f"poyo_shorts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.mp4").strip()
+            output_path = (config.data_dir / "poyo_generated" / output_name).resolve()
+
+            generation_result = generate_and_download_poyo_video(
+                api_key=config.poyo_api_key,
+                base_url=config.poyo_api_base_url,
+                generate_path=config.poyo_generate_path,
+                status_path_template=config.poyo_status_path_template,
+                payload=payload.poyo_payload,
+                output_path=output_path,
+                id_field=config.poyo_id_field,
+                status_field=config.poyo_status_field,
+                download_url_field=config.poyo_download_url_field,
+                ready_statuses=config.poyo_ready_statuses,
+                failed_statuses=config.poyo_failed_statuses,
+                poll_interval_seconds=config.poyo_poll_interval_seconds,
+                max_wait_seconds=config.poyo_max_wait_seconds,
+            )
+            shorts_result = _publish_shorts_only(
+                source_video_path=output_path,
+                track_for_metadata=payload.track_for_metadata,
+                theme=payload.theme,
+                tags=payload.tags,
+                publish_at_iso=payload.publish_at_iso,
+                shorts_count=payload.shorts_count,
+                short_delay_hours=payload.short_delay_hours,
+                short_interval_hours=payload.short_interval_hours,
+                shorts_privacy_status=payload.shorts_privacy_status,
+                cleanup_source_after_publish=payload.cleanup_source_after_publish,
+                cleanup_shorts_after_upload=payload.cleanup_shorts_after_upload,
+                clip_seconds=payload.clip_seconds,
+                clip_min_seconds=payload.clip_min_seconds,
+                clip_max_seconds=payload.clip_max_seconds,
+                tracks_dir_raw=payload.tracks_dir,
+                output_dir_raw=payload.output_dir,
+            )
+
+            return {
+                "status": "ok",
+                "message": "poyo generated and shorts published",
+                "generation": generation_result,
+                "publication": shorts_result,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("TRIGGER: generate-poyo-shorts-only failed: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
         finally:
             run_lock.release()

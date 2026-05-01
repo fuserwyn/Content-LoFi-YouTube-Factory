@@ -1,0 +1,139 @@
+{
+  "name": "Content Factory - Poyo Generate + Publish",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "prompt",
+              "name": "prompt",
+              "value": "Lo-fi beach sunset with soft camera movement",
+              "type": "string"
+            },
+            {
+              "id": "theme",
+              "name": "theme",
+              "value": "Ocean Sunset",
+              "type": "string"
+            },
+            {
+              "id": "track-for-metadata",
+              "name": "track_for_metadata",
+              "value": "03 - Sea.mp3",
+              "type": "string"
+            },
+            {
+              "id": "output-filename",
+              "name": "output_filename",
+              "value": "poyo-ocean-sunset.mp4",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-input-node",
+      "name": "Set Poyo Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{\n  json: {\n    poyo_payload: {\n      prompt: $json.prompt\n    },\n    output_filename: $json.output_filename,\n    track_for_metadata: $json.track_for_metadata,\n    theme: $json.theme,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 3,\n    short_delay_hours: 24,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'private',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
+      },
+      "id": "build-request-node",
+      "name": "Build Generate+Publish Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_POYO_GENERATE_AND_PUBLISH_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "http-request-node",
+      "name": "Generate Poyo and Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Poyo Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Poyo Input": {
+      "main": [
+        [
+          {
+            "node": "Build Generate+Publish Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Generate+Publish Payload": {
+      "main": [
+        [
+          {
+            "node": "Generate Poyo and Publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
