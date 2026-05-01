@@ -50,7 +50,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return [{\n  json: {\n    poyo_payload: {\n      prompt: $json.prompt\n    },\n    output_filename: 'poyo-shorts-test.mp4',\n    track_for_metadata: $json.track_for_metadata,\n    theme: $json.theme,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 1,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    shorts_privacy_status: 'public',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
+        "jsCode": "return [{\n  json: {\n    poyo_payload: {\n      model: 'seedance-2-fast',\n      input: {\n        prompt: $json.prompt,\n        aspect_ratio: '9:16',\n        resolution: '720p',\n        duration: 8,\n        generate_audio: false\n      }\n    },\n    output_filename: 'poyo-shorts-test.mp4',\n    track_for_metadata: $json.track_for_metadata,\n    theme: $json.theme,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 1,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    shorts_privacy_status: 'public',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
       },
       "id": "build-test-payload-node",
       "name": "Build Poyo Shorts Test Payload",

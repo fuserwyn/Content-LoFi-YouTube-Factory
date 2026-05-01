@@ -56,7 +56,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "return [{\n  json: {\n    poyo_payload: {\n      prompt: $json.prompt\n    },\n    output_filename: $json.output_filename,\n    track_for_metadata: $json.track_for_metadata,\n    theme: $json.theme,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 3,\n    short_delay_hours: 24,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'private',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
+        "jsCode": "return [{\n  json: {\n    poyo_payload: {\n      model: 'seedance-2-fast',\n      input: {\n        prompt: $json.prompt,\n        aspect_ratio: '16:9',\n        resolution: '720p',\n        duration: 8,\n        generate_audio: false\n      }\n    },\n    output_filename: $json.output_filename,\n    track_for_metadata: $json.track_for_metadata,\n    theme: $json.theme,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: 3,\n    short_delay_hours: 24,\n    short_interval_hours: 24,\n    clip_seconds: 30,\n    main_privacy_status: 'public',\n    shorts_privacy_status: 'private',\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true\n  }\n}];"
       },
       "id": "build-request-node",
       "name": "Build Generate+Publish Payload",

@@ -81,6 +81,16 @@ def _parse_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _env_with_fallback(primary: str, fallback: str, default: str) -> str:
+    value = os.getenv(primary)
+    if value is not None and value.strip() != "":
+        return value.strip()
+    legacy = os.getenv(fallback)
+    if legacy is not None and legacy.strip() != "":
+        return legacy.strip()
+    return default
+
+
 def load_config() -> AppConfig:
     load_dotenv()
 
@@ -116,17 +126,25 @@ def load_config() -> AppConfig:
     resolved_tiktok_output_dir.mkdir(parents=True, exist_ok=True)
     poyo_ready_statuses = [
         item.strip().lower()
-        for item in os.getenv("POYO_READY_STATUSES", "completed,succeeded,ready").split(",")
+        for item in _env_with_fallback(
+            "POYO_SEEDANCE_READY_STATUSES",
+            "POYO_READY_STATUSES",
+            "completed,succeeded,ready",
+        ).split(",")
         if item.strip()
     ]
     poyo_failed_statuses = [
         item.strip().lower()
-        for item in os.getenv("POYO_FAILED_STATUSES", "failed,error,cancelled").split(",")
+        for item in _env_with_fallback(
+            "POYO_SEEDANCE_FAILED_STATUSES",
+            "POYO_FAILED_STATUSES",
+            "failed,error,cancelled",
+        ).split(",")
         if item.strip()
     ]
 
     return AppConfig(
-        pexels_api_key=_require_env("PEXELS_API_KEY"),
+        pexels_api_key=os.getenv("PEXELS_API_KEY", "").strip(),
         youtube_client_id=_require_env("YOUTUBE_CLIENT_ID"),
         youtube_client_secret=_require_env("YOUTUBE_CLIENT_SECRET"),
         youtube_refresh_token=_require_env("YOUTUBE_REFRESH_TOKEN"),
@@ -175,15 +193,29 @@ def load_config() -> AppConfig:
         telegram_send_tiktok=_parse_bool("TELEGRAM_SEND_TIKTOK", False),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-        poyo_api_key=os.getenv("POYO_API_KEY", "").strip(),
-        poyo_api_base_url=os.getenv("POYO_API_BASE_URL", "https://api.poyo.ai").strip(),
-        poyo_generate_path=os.getenv("POYO_GENERATE_PATH", "/v1/videos/generate").strip(),
-        poyo_status_path_template=os.getenv("POYO_STATUS_PATH_TEMPLATE", "/v1/videos/{job_id}").strip(),
-        poyo_download_url_field=os.getenv("POYO_DOWNLOAD_URL_FIELD", "video_url").strip(),
-        poyo_id_field=os.getenv("POYO_ID_FIELD", "id").strip(),
-        poyo_status_field=os.getenv("POYO_STATUS_FIELD", "status").strip(),
+        poyo_api_key=_env_with_fallback("POYO_SEEDANCE_API_KEY", "POYO_API_KEY", ""),
+        poyo_api_base_url=_env_with_fallback("POYO_SEEDANCE_API_BASE_URL", "POYO_API_BASE_URL", "https://api.poyo.ai"),
+        poyo_generate_path=_env_with_fallback("POYO_SEEDANCE_GENERATE_PATH", "POYO_GENERATE_PATH", "/api/generate/submit"),
+        poyo_status_path_template=_env_with_fallback(
+            "POYO_SEEDANCE_STATUS_PATH_TEMPLATE",
+            "POYO_STATUS_PATH_TEMPLATE",
+            "/api/generate/status",
+        ),
+        poyo_download_url_field=_env_with_fallback(
+            "POYO_SEEDANCE_DOWNLOAD_URL_FIELD",
+            "POYO_DOWNLOAD_URL_FIELD",
+            "data.video_url",
+        ),
+        poyo_id_field=_env_with_fallback("POYO_SEEDANCE_ID_FIELD", "POYO_ID_FIELD", "data.task_id"),
+        poyo_status_field=_env_with_fallback("POYO_SEEDANCE_STATUS_FIELD", "POYO_STATUS_FIELD", "data.status"),
         poyo_ready_statuses=poyo_ready_statuses,
         poyo_failed_statuses=poyo_failed_statuses,
-        poyo_poll_interval_seconds=max(1, int(os.getenv("POYO_POLL_INTERVAL_SECONDS", "5"))),
-        poyo_max_wait_seconds=max(10, int(os.getenv("POYO_MAX_WAIT_SECONDS", "600"))),
+        poyo_poll_interval_seconds=max(
+            1,
+            int(_env_with_fallback("POYO_SEEDANCE_POLL_INTERVAL_SECONDS", "POYO_POLL_INTERVAL_SECONDS", "5")),
+        ),
+        poyo_max_wait_seconds=max(
+            10,
+            int(_env_with_fallback("POYO_SEEDANCE_MAX_WAIT_SECONDS", "POYO_MAX_WAIT_SECONDS", "600")),
+        ),
     )

@@ -6,7 +6,6 @@ from src.config import _parse_bool, load_config
 
 
 REQUIRED_ENV = {
-    "PEXELS_API_KEY": "test_pexels",
     "YOUTUBE_CLIENT_ID": "test_client_id",
     "YOUTUBE_CLIENT_SECRET": "test_client_secret",
     "YOUTUBE_REFRESH_TOKEN": "test_refresh",
@@ -32,6 +31,7 @@ def test_load_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("CONTENT_TAGS", "nature,surf")
     monkeypatch.setenv("UPLOAD_ENABLED", "false")
+    monkeypatch.setenv("PEXELS_API_KEY", "test_pexels")
 
     config = load_config()
 

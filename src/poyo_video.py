@@ -10,6 +10,15 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _get_nested(data: dict, dotted_key: str) -> str:
+    current = data
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(part)
+    return "" if current is None else str(current).strip()
+
+
 def generate_and_download_poyo_video(
     *,
     api_key: str,
@@ -27,7 +36,7 @@ def generate_and_download_poyo_video(
     max_wait_seconds: int = 600,
 ) -> dict:
     if not api_key.strip():
-        raise RuntimeError("POYO_API_KEY is empty")
+        raise RuntimeError("POYO_SEEDANCE_API_KEY is empty (legacy POYO_API_KEY also supported)")
 
     ready = set((ready_statuses or ["completed", "succeeded", "ready"]))
     failed = set((failed_statuses or ["failed", "error", "cancelled"]))
@@ -42,24 +51,32 @@ def generate_and_download_poyo_video(
     start_resp.raise_for_status()
     start_data = start_resp.json()
 
-    video_url = str(start_data.get(download_url_field, "")).strip()
-    job_id = str(start_data.get(id_field, "")).strip()
+    video_url = _get_nested(start_data, download_url_field)
+    job_id = _get_nested(start_data, id_field)
 
     if not video_url:
         if not job_id:
             raise RuntimeError(f"Poyo response missing both '{id_field}' and '{download_url_field}'")
         deadline = time.time() + max_wait_seconds
         while True:
-            status_resp = requests.get(
-                _join_url(base_url, status_path_template.format(job_id=job_id)),
-                headers=headers,
-                timeout=60,
-            )
+            if "{job_id}" in status_path_template:
+                status_resp = requests.get(
+                    _join_url(base_url, status_path_template.format(job_id=job_id)),
+                    headers=headers,
+                    timeout=60,
+                )
+            else:
+                status_resp = requests.post(
+                    _join_url(base_url, status_path_template),
+                    json={"task_id": job_id},
+                    headers=headers,
+                    timeout=60,
+                )
             status_resp.raise_for_status()
             status_data = status_resp.json()
 
-            status_value = str(status_data.get(status_field, "")).strip().lower()
-            maybe_url = str(status_data.get(download_url_field, "")).strip()
+            status_value = _get_nested(status_data, status_field).lower()
+            maybe_url = _get_nested(status_data, download_url_field)
 
             if maybe_url and status_value in ready:
                 video_url = maybe_url

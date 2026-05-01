@@ -66,8 +66,9 @@ Set these in the n8n service:
   - Missing source safety is enabled:
     - `skip_if_source_missing=true` (workflow returns `skipped` instead of failing)
 - For the Poyo workflow:
-  - Set `POYO_API_KEY` in Content Factory env (you can add later)
+  - Set `POYO_SEEDANCE_API_KEY` in Content Factory env (legacy `POYO_API_KEY` still works)
   - Open node `Set Poyo Input` and update `prompt`, `theme`, `track_for_metadata`
+  - Seedance payload uses `model` + `input` and `generate_audio=false` (music comes from your track in shorts/long pipeline)
   - Endpoint `/generate-poyo-and-publish` generates video via Poyo, then publishes main+shorts using the same pipeline
 - For the Poyo shorts-only test workflow:
   - Start with `workflows/content-factory-poyo-shorts-test.json`
