@@ -50,6 +50,12 @@
               "type": "string"
             },
             {
+              "id": "seedance-model",
+              "name": "seedance_model",
+              "value": "seedance-2-fast",
+              "type": "string"
+            },
+            {
               "id": "seedance-dur",
               "name": "seedance_duration",
               "value": "15",
@@ -76,18 +82,19 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [460, 320],
-      "notes": "Edit prompt_visual / track_for_metadata (file in assets/tracks) before run."
+      "notes": "Edit prompt_visual / track_for_metadata. seedance_model: set here (Code node cannot use $env on locked-down n8n). To drive from env: switch this field to Expression = {{ $env.POYO_SEEDANCE_MODEL || 'seedance-2-fast' }}"
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const j = $input.first().json;\nconst model = ($env.POYO_SEEDANCE_MODEL || 'seedance-2-fast').trim();\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = 'lo-fi hip hop music video aesthetic, chillhop, soft neon palette, cozy mood, slow smooth camera, subtle 35mm grain, no people faces focus, no readable text, no logos, no watermark, vertical cinematic';\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\n// PoYo Seedance 2: duration 4–15 seconds (API)\nconst rawDur = parseInt(String(j.seedance_duration || '15'), 10) || 15;\nconst duration = Math.min(15, Math.max(4, rawDur));\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-lofi-hiphop-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nreturn [{\n  json: {\n    poyo_payload: {\n      model,\n      input: {\n        prompt,\n        aspect_ratio: '9:16',\n        resolution: '720p',\n        duration,\n        generate_audio: false,\n      },\n    },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n  },\n}];\n"
+        "jsCode": "const j = $input.first().json;\n// No $env here: many n8n installs block env access inside Code nodes.\nconst model = String(j.seedance_model || 'seedance-2-fast').trim() || 'seedance-2-fast';\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = 'lo-fi hip hop music video aesthetic, chillhop, soft neon palette, cozy mood, slow smooth camera, subtle 35mm grain, no people faces focus, no readable text, no logos, no watermark, vertical cinematic';\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\n// PoYo Seedance 2: duration 4–15 seconds (API)\nconst rawDur = parseInt(String(j.seedance_duration || '15'), 10) || 15;\nconst duration = Math.min(15, Math.max(4, rawDur));\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-lofi-hiphop-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nreturn [{\n  json: {\n    poyo_payload: {\n      model,\n      input: {\n        prompt,\n        aspect_ratio: '9:16',\n        resolution: '720p',\n        duration,\n        generate_audio: false,\n      },\n    },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n  },\n}];\n"
       },
       "id": "lofi-build-poyo-payload",
       "name": "Build Poyo LoFi Shorts Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [700, 320]
+      "position": [700, 320],
+      "notes": "Does not use $env (blocked in Code sandbox). Model comes from Set → seedance_model."
     },
     {
       "parameters": {
