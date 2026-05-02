@@ -1,0 +1,141 @@
+{
+  "name": "Content Factory - Manual Poyo LoFi Hip Hop Shorts (AI)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "lofi-manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [220, 320]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "prompt-visual",
+              "name": "prompt_visual",
+              "value": "Cozy late-night city for lo-fi hip hop: soft teal and purple neon, rainy window reflections, bedroom studio corner with sampler and vinyl, slow horizontal drift, tape warmth, chillhop mood, cinematic vertical composition",
+              "type": "string"
+            },
+            {
+              "id": "theme",
+              "name": "theme",
+              "value": "Lo-fi Hip Hop Night Session",
+              "type": "string"
+            },
+            {
+              "id": "track-meta",
+              "name": "track_for_metadata",
+              "value": "03 - Sea.mp3",
+              "type": "string"
+            },
+            {
+              "id": "tags",
+              "name": "tags",
+              "value": "lofi hip hop, chillhop, study beats, vertical, shorts, cozy, neon night",
+              "type": "string"
+            },
+            {
+              "id": "shorts-count",
+              "name": "shorts_count",
+              "value": "1",
+              "type": "string"
+            },
+            {
+              "id": "clip-sec",
+              "name": "clip_seconds",
+              "value": "30",
+              "type": "string"
+            },
+            {
+              "id": "seedance-dur",
+              "name": "seedance_duration",
+              "value": "8",
+              "type": "string"
+            },
+            {
+              "id": "shorts-privacy",
+              "name": "shorts_privacy_status",
+              "value": "public",
+              "type": "string"
+            },
+            {
+              "id": "out-name",
+              "name": "output_filename",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "lofi-set-inputs",
+      "name": "Set LoFi Hip Hop Inputs",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 320],
+      "notes": "Edit prompt_visual / track_for_metadata (file in assets/tracks) before run."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const j = $input.first().json;\nconst model = ($env.POYO_SEEDANCE_MODEL || 'seedance-2-fast').trim();\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = 'lo-fi hip hop music video aesthetic, chillhop, soft neon palette, cozy mood, slow smooth camera, subtle 35mm grain, no people faces focus, no readable text, no logos, no watermark, vertical cinematic';\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\nconst duration = Math.max(4, parseInt(String(j.seedance_duration || '8'), 10) || 8);\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-lofi-hiphop-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nreturn [{\n  json: {\n    poyo_payload: {\n      model,\n      input: {\n        prompt,\n        aspect_ratio: '9:16',\n        resolution: '720p',\n        duration,\n        generate_audio: false,\n      },\n    },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n  },\n}];\n"
+      },
+      "id": "lofi-build-poyo-payload",
+      "name": "Build Poyo LoFi Shorts Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.CONTENT_FACTORY_POYO_SHORTS_ONLY_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 1200000
+        }
+      },
+      "id": "lofi-http-poyo-shorts",
+      "name": "POST generate-poyo-shorts-only",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 320],
+      "notes": "Poyo + нарезка + загрузка шортов на YouTube. Generation может занять много минут — timeout увеличен."
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Set LoFi Hip Hop Inputs", "type": "main", "index": 0 }]]
+    },
+    "Set LoFi Hip Hop Inputs": {
+      "main": [[{ "node": "Build Poyo LoFi Shorts Payload", "type": "main", "index": 0 }]]
+    },
+    "Build Poyo LoFi Shorts Payload": {
+      "main": [[{ "node": "POST generate-poyo-shorts-only", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
