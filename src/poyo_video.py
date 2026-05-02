@@ -10,12 +10,19 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _get_nested(data: dict, dotted_key: str) -> str:
-    current = data
+def _get_nested(data: object, dotted_key: str) -> str:
+    """Traverse dict keys and list indices (e.g. data.files.0.file_url)."""
+    current: object = data
     for part in dotted_key.split("."):
-        if not isinstance(current, dict):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit():
+            idx = int(part)
+            current = current[idx] if 0 <= idx < len(current) else None
+        else:
             return ""
-        current = current.get(part)
+        if current is None:
+            return ""
     return "" if current is None else str(current).strip()
 
 
@@ -38,7 +45,7 @@ def generate_and_download_poyo_video(
     if not api_key.strip():
         raise RuntimeError("POYO_SEEDANCE_API_KEY is empty (legacy POYO_API_KEY also supported)")
 
-    ready = set((ready_statuses or ["completed", "succeeded", "ready"]))
+    ready = set((ready_statuses or ["finished", "completed", "succeeded", "ready"]))
     failed = set((failed_statuses or ["failed", "error", "cancelled"]))
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 

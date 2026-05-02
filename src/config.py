@@ -134,7 +134,7 @@ def load_config() -> AppConfig:
         for item in _env_with_fallback(
             "POYO_SEEDANCE_READY_STATUSES",
             "POYO_READY_STATUSES",
-            "completed,succeeded,ready",
+            "finished,completed,succeeded,ready",
         ).split(",")
         if item.strip()
     ]
@@ -213,12 +213,12 @@ def load_config() -> AppConfig:
         poyo_status_path_template=_env_with_fallback(
             "POYO_SEEDANCE_STATUS_PATH_TEMPLATE",
             "POYO_STATUS_PATH_TEMPLATE",
-            "/api/generate/status",
+            "/api/generate/status/{job_id}",
         ),
         poyo_download_url_field=_env_with_fallback(
             "POYO_SEEDANCE_DOWNLOAD_URL_FIELD",
             "POYO_DOWNLOAD_URL_FIELD",
-            "data.video_url",
+            "data.files.0.file_url",
         ),
         poyo_id_field=_env_with_fallback("POYO_SEEDANCE_ID_FIELD", "POYO_ID_FIELD", "data.task_id"),
         poyo_status_field=_env_with_fallback("POYO_SEEDANCE_STATUS_FIELD", "POYO_STATUS_FIELD", "data.status"),
