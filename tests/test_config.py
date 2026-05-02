@@ -12,6 +12,13 @@ REQUIRED_ENV = {
 }
 
 
+def _clear_youtube_channel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent developer .env from affecting channel-related assertions."""
+    monkeypatch.setenv("YOUTUBE_UPLOAD_CHANNEL_ID", "")
+    monkeypatch.setenv("YOUTUBE_CHANNEL_ID", "")
+    monkeypatch.setenv("YOUTUBE_CONTENT_OWNER_ID", "")
+
+
 def test_parse_bool_true_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UPLOAD_ENABLED", "yes")
     assert _parse_bool("UPLOAD_ENABLED", False) is True
@@ -29,6 +36,7 @@ def test_load_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
 
+    _clear_youtube_channel_env(monkeypatch)
     monkeypatch.setenv("CONTENT_TAGS", "nature,surf")
     monkeypatch.setenv("UPLOAD_ENABLED", "false")
     monkeypatch.setenv("PEXELS_API_KEY", "test_pexels")
@@ -47,6 +55,7 @@ def test_load_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_load_config_upload_channel_prefers_primary_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
+    _clear_youtube_channel_env(monkeypatch)
     monkeypatch.setenv("YOUTUBE_UPLOAD_CHANNEL_ID", "UC_primary")
     monkeypatch.setenv("YOUTUBE_CHANNEL_ID", "UC_legacy")
 
@@ -57,7 +66,8 @@ def test_load_config_upload_channel_prefers_primary_env(monkeypatch: pytest.Monk
 def test_load_config_upload_channel_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.delenv("YOUTUBE_UPLOAD_CHANNEL_ID", raising=False)
+    _clear_youtube_channel_env(monkeypatch)
+    monkeypatch.setenv("YOUTUBE_UPLOAD_CHANNEL_ID", "")
     monkeypatch.setenv("YOUTUBE_CHANNEL_ID", "UC_legacy_only")
 
     config = load_config()

@@ -284,6 +284,7 @@ def run(
                 default_language=config.youtube_default_language,
                 publish_at_iso=config.publish_at_iso,
                 channel_id=config.youtube_upload_channel_id,
+                content_owner_id=config.youtube_content_owner_id,
             )
             youtube_video_id = upload_result.video_id
             report_payload["upload"] = {

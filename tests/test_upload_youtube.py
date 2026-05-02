@@ -100,10 +100,32 @@ def test_upload_video_passes_target_channel_to_insert(tmp_path: Path, mocker) ->
         client_secret="test_client_secret",
         refresh_token="test_refresh_token",
         channel_id=" UC_target_channel ",
+        content_owner_id=" content_owner_123 ",
     )
     mocks["videos"].insert.assert_called_once()
     call_kwargs = mocks["videos"].insert.call_args[1]
     assert call_kwargs["onBehalfOfContentOwnerChannel"] == "UC_target_channel"
+    assert call_kwargs["onBehalfOfContentOwner"] == "content_owner_123"
+
+
+def test_upload_video_channel_without_content_owner_skips_on_behalf(tmp_path: Path, mocker) -> None:
+    video_path = tmp_path / "test.mp4"
+    video_path.write_bytes(b"fake video")
+    meta = VideoMeta(title="T", description="D", tags=["t"])
+    mocks = _setup_youtube_mocks(mocker)
+    upload_video(
+        video_path=video_path,
+        meta=meta,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        refresh_token="test_refresh_token",
+        channel_id="UC_only_channel",
+        content_owner_id="",
+    )
+    mocks["videos"].insert.assert_called_once()
+    call_kwargs = mocks["videos"].insert.call_args[1]
+    assert "onBehalfOfContentOwnerChannel" not in call_kwargs
+    assert "onBehalfOfContentOwner" not in call_kwargs
 
 
 def test_upload_video_omits_channel_when_blank(tmp_path: Path, mocker) -> None:

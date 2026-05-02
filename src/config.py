@@ -12,6 +12,7 @@ class AppConfig:
     youtube_client_secret: str
     youtube_refresh_token: str
     youtube_upload_channel_id: str
+    youtube_content_owner_id: str
     youtube_default_privacy: str
     youtube_category_id: str
     youtube_default_language: str
@@ -157,6 +158,7 @@ def load_config() -> AppConfig:
             "YOUTUBE_CHANNEL_ID",
             "",
         ).strip(),
+        youtube_content_owner_id=os.getenv("YOUTUBE_CONTENT_OWNER_ID", "").strip(),
         youtube_default_privacy=os.getenv("YOUTUBE_DEFAULT_PRIVACY", "private"),
         youtube_category_id=os.getenv("YOUTUBE_CATEGORY_ID", "10"),
         youtube_default_language=os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "en"),

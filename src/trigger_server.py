@@ -219,6 +219,7 @@ def publish_main_and_shorts_impl(
             else ""
         ),
         channel_id=config.youtube_upload_channel_id,
+        content_owner_id=config.youtube_content_owner_id,
     )
 
     offsets_raw = payload.short_publish_offset_hours
@@ -277,6 +278,7 @@ def publish_main_and_shorts_impl(
                 else ""
             ),
             channel_id=config.youtube_upload_channel_id,
+            content_owner_id=config.youtube_content_owner_id,
         )
         short_uploads.append(
             {
@@ -370,6 +372,7 @@ def workflow_render_main_and_cut_shorts_impl(
             else ""
         ),
         channel_id=config.youtube_upload_channel_id,
+        content_owner_id=config.youtube_content_owner_id,
     )
     fixed_track_audio: Path | None = None
     slice_track_parts = False
@@ -463,6 +466,7 @@ def workflow_publish_short_impl(
         default_language=config.youtube_default_language,
         publish_at_iso=publish_at,
         channel_id=config.youtube_upload_channel_id,
+        content_owner_id=config.youtube_content_owner_id,
     )
     if config.telegram_bot_token and config.telegram_chat_id:
         send_message_to_telegram(
@@ -560,6 +564,7 @@ def start_trigger_server(config: AppConfig) -> None:
                     else ""
                 ),
                 channel_id=config.youtube_upload_channel_id,
+                content_owner_id=config.youtube_content_owner_id,
             )
             short_url = f"https://www.youtube.com/shorts/{upload_result.video_id}"
             uploaded_shorts.append(
