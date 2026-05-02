@@ -556,7 +556,6 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
         Mock(video_id="short1", status="private"),
         Mock(video_id="short2", status="private"),
     ]
-    mock_send_telegram = mocker.patch("src.trigger_server.send_files_to_telegram")
     mock_send_telegram_message = mocker.patch("src.trigger_server.send_message_to_telegram")
     mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
 
@@ -597,11 +596,9 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert response.json()["schedule"]["short_publish_offset_hours"] == [1.0, 8.0]
     assert mock_upload.call_count == 3
     mock_create_cuts.assert_called_once()
-    mock_send_telegram.assert_called_once()
     assert mock_send_telegram_message.call_count == 2
     tg_msgs = [call.kwargs["message"] for call in mock_send_telegram_message.call_args_list]
-    assert "Main video published" in tg_msgs[0]
-    assert "Shorts:" in tg_msgs[1]
+    assert tg_msgs[0] == "https://www.youtube.com/watch?v=main123"
     assert "youtube.com/shorts/short1" in tg_msgs[1]
     assert "youtube.com/shorts/short2" in tg_msgs[1]
     first_call = mock_upload.call_args_list[0].kwargs
@@ -745,7 +742,6 @@ def test_generate_poyo_and_publish_endpoint(tmp_path: Path, mocker) -> None:
     mock_create_cuts.return_value = [clip1]
     mock_upload = mocker.patch("src.trigger_server.upload_video")
     mock_upload.side_effect = [Mock(video_id="main123", status="public"), Mock(video_id="short1", status="private")]
-    mocker.patch("src.trigger_server.send_files_to_telegram")
     mocker.patch("src.trigger_server.send_message_to_telegram")
     mock_uvicorn = mocker.patch("src.trigger_server.uvicorn.run")
 

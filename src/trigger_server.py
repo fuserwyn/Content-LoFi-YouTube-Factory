@@ -14,7 +14,7 @@ from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
 from .main import PexelsRenderBundle, _cleanup_temp_files, render_pexels_track_bundle, run as pipeline_run
 from .state_store import RunRecord, create_state_store
-from .notify_telegram import send_files_to_telegram, send_message_to_telegram
+from .notify_telegram import send_message_to_telegram
 from .poyo_video import generate_and_download_poyo_video
 from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import create_tiktok_cuts
@@ -292,31 +292,16 @@ def publish_main_and_shorts_impl(
         send_message_to_telegram(
             bot_token=config.telegram_bot_token,
             chat_id=config.telegram_chat_id,
-            message=f"Main video published: {youtube_url}",
+            message=youtube_url,
         )
         if short_uploads:
             short_lines = "\n".join(
-                f"{idx}. https://www.youtube.com/shorts/{su['video_id']}"
-                for idx, su in enumerate(short_uploads, start=1)
+                f"https://www.youtube.com/shorts/{su['video_id']}" for su in short_uploads
             )
             send_message_to_telegram(
                 bot_token=config.telegram_bot_token,
                 chat_id=config.telegram_chat_id,
-                message=f"Shorts:\n{short_lines}",
-            )
-        notify_file = source_video_path if source_video_path.exists() else None
-        if notify_file is not None:
-            send_files_to_telegram(
-                bot_token=config.telegram_bot_token,
-                chat_id=config.telegram_chat_id,
-                file_paths=[notify_file],
-                caption_prefix=(
-                    f"Published main={main_upload.video_id} "
-                    f"shorts={len(short_uploads)} base={publish_base.isoformat().replace('+00:00', 'Z')}"
-                ),
-                telegram_api_id=config.telegram_api_id,
-                telegram_api_hash=config.telegram_api_hash,
-                telegram_session_string=config.telegram_session_string,
+                message=short_lines,
             )
 
     if payload.cleanup_shorts_after_upload:
@@ -421,19 +406,8 @@ def workflow_render_main_and_cut_shorts_impl(
         send_message_to_telegram(
             bot_token=config.telegram_bot_token,
             chat_id=config.telegram_chat_id,
-            message=f"Main video published: {youtube_url} (short files on disk for n8n)",
+            message=youtube_url,
         )
-        nf = source_video_path if source_video_path.exists() else None
-        if nf is not None:
-            send_files_to_telegram(
-                bot_token=config.telegram_bot_token,
-                chat_id=config.telegram_chat_id,
-                file_paths=[nf],
-                caption_prefix=f"Workflow main={main_upload.video_id} shorts_on_disk={len(shorts_files)}",
-                telegram_api_id=config.telegram_api_id,
-                telegram_api_hash=config.telegram_api_hash,
-                telegram_session_string=config.telegram_session_string,
-            )
 
     if payload.cleanup_source_after_publish:
         source_video_path.unlink(missing_ok=True)
@@ -490,10 +464,7 @@ def workflow_publish_short_impl(
         send_message_to_telegram(
             bot_token=config.telegram_bot_token,
             chat_id=config.telegram_chat_id,
-            message=(
-                f"Short {payload.short_index + 1}: "
-                f"https://www.youtube.com/shorts/{upload_result.video_id}"
-            ),
+            message=f"https://www.youtube.com/shorts/{upload_result.video_id}",
         )
     if payload.cleanup_after:
         short_path.unlink(missing_ok=True)
@@ -585,7 +556,7 @@ def start_trigger_server(config: AppConfig) -> None:
                     else ""
                 ),
             )
-            short_url = f"https://www.youtube.com/watch?v={upload_result.video_id}"
+            short_url = f"https://www.youtube.com/shorts/{upload_result.video_id}"
             uploaded_shorts.append(
                 {
                     "video_id": upload_result.video_id,
@@ -601,7 +572,7 @@ def start_trigger_server(config: AppConfig) -> None:
                 send_message_to_telegram(
                     bot_token=config.telegram_bot_token,
                     chat_id=config.telegram_chat_id,
-                    message=f"Short published/scheduled: {short_url}",
+                    message=short_url,
                 )
 
         if cleanup_shorts_after_upload:
