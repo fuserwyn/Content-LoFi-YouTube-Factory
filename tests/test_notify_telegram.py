@@ -1,9 +1,10 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import requests
 
-from src.notify_telegram import send_files_to_telegram, send_message_to_telegram
+from src.notify_telegram import TELEGRAM_SEND_DOCUMENT_MAX_BYTES, send_files_to_telegram, send_message_to_telegram
 
 
 def test_send_files_to_telegram_noop_when_empty_token(tmp_path: Path, mocker) -> None:
@@ -233,3 +234,59 @@ def test_send_message_to_telegram_posts_text(mocker) -> None:
     assert call_args[0][0] == "https://api.telegram.org/bottest_token/sendMessage"
     assert call_args[1]["data"]["chat_id"] == "123456"
     assert call_args[1]["data"]["text"] == "Hello"
+
+
+def test_send_files_to_telegram_skips_oversize_file_sends_message_instead(tmp_path: Path, mocker) -> None:
+    file_path = tmp_path / "big.mp4"
+    file_path.write_bytes(b"x")
+
+    stat_mock = MagicMock()
+    stat_mock.st_size = TELEGRAM_SEND_DOCUMENT_MAX_BYTES + 1
+    mocker.patch.object(Path, "stat", return_value=stat_mock)
+
+    mock_response = mocker.Mock()
+    mock_response.raise_for_status = mocker.Mock()
+    mock_post = mocker.patch("src.notify_telegram.requests.post", return_value=mock_response)
+
+    send_files_to_telegram(
+        bot_token="test_token",
+        chat_id="123456",
+        file_paths=[file_path],
+        caption_prefix="Main render",
+    )
+
+    mock_post.assert_called_once()
+    assert "sendMessage" in mock_post.call_args[0][0]
+    assert "too large" in mock_post.call_args[1]["data"]["text"].lower() or "50" in mock_post.call_args[1]["data"]["text"]
+
+
+def test_send_files_to_telegram_413_does_not_raise_sends_notice(tmp_path: Path, mocker) -> None:
+    file_path = tmp_path / "edge.mp4"
+    file_path.write_bytes(b"fake")
+
+    doc_resp = mocker.Mock()
+    doc_resp.status_code = 413
+
+    def raise_413() -> None:
+        err = requests.HTTPError()
+        err.response = doc_resp
+        raise err
+
+    doc_resp.raise_for_status = raise_413
+
+    msg_resp = mocker.Mock()
+    msg_resp.raise_for_status = mocker.Mock()
+    mock_post = mocker.patch(
+        "src.notify_telegram.requests.post",
+        side_effect=[doc_resp, msg_resp],
+    )
+
+    send_files_to_telegram(
+        bot_token="test_token",
+        chat_id="123456",
+        file_paths=[file_path],
+    )
+
+    assert mock_post.call_count == 2
+    assert "sendDocument" in mock_post.call_args_list[0][0][0]
+    assert "sendMessage" in mock_post.call_args_list[1][0][0]

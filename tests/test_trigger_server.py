@@ -59,6 +59,9 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         telegram_send_tiktok=False,
         telegram_bot_token="",
         telegram_chat_id="",
+        telegram_api_id=0,
+        telegram_api_hash="",
+        telegram_session_string="",
         poyo_api_key="",
         poyo_api_base_url="https://api.poyo.ai",
         poyo_generate_path="/v1/videos/generate",
@@ -595,7 +598,12 @@ def test_publish_video_with_shorts_uploads_main_and_shorts(tmp_path: Path, mocke
     assert mock_upload.call_count == 3
     mock_create_cuts.assert_called_once()
     mock_send_telegram.assert_called_once()
-    mock_send_telegram_message.assert_called_once()
+    assert mock_send_telegram_message.call_count == 2
+    tg_msgs = [call.kwargs["message"] for call in mock_send_telegram_message.call_args_list]
+    assert "Main video published" in tg_msgs[0]
+    assert "Shorts:" in tg_msgs[1]
+    assert "youtube.com/shorts/short1" in tg_msgs[1]
+    assert "youtube.com/shorts/short2" in tg_msgs[1]
     first_call = mock_upload.call_args_list[0].kwargs
     second_call = mock_upload.call_args_list[1].kwargs
     assert first_call["default_privacy"] == "public"

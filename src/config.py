@@ -56,6 +56,9 @@ class AppConfig:
     telegram_send_tiktok: bool
     telegram_bot_token: str
     telegram_chat_id: str
+    telegram_api_id: int
+    telegram_api_hash: str
+    telegram_session_string: str
     poyo_api_key: str
     poyo_api_base_url: str
     poyo_generate_path: str
@@ -193,6 +196,9 @@ def load_config() -> AppConfig:
         telegram_send_tiktok=_parse_bool("TELEGRAM_SEND_TIKTOK", False),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+        telegram_api_id=int(os.getenv("TELEGRAM_API_ID", "0").strip() or "0"),
+        telegram_api_hash=os.getenv("TELEGRAM_API_HASH", "").strip(),
+        telegram_session_string=os.getenv("TELEGRAM_SESSION_STRING", "").strip(),
         poyo_api_key=_env_with_fallback("POYO_SEEDANCE_API_KEY", "POYO_API_KEY", ""),
         poyo_api_base_url=_env_with_fallback("POYO_SEEDANCE_API_BASE_URL", "POYO_API_BASE_URL", "https://api.poyo.ai"),
         poyo_generate_path=_env_with_fallback("POYO_SEEDANCE_GENERATE_PATH", "POYO_GENERATE_PATH", "/api/generate/submit"),

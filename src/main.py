@@ -14,7 +14,6 @@ from .fetch_assets import ClipAsset, fetch_and_download_clips, load_local_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
 from .notify_n8n import send_run_notification
-from .notify_telegram import send_files_to_telegram
 from .render_video import RenderResult, render_video_with_ffmpeg
 from .select_track import choose_track
 from .state_store import RunRecord, StateStore, create_state_store
@@ -260,18 +259,11 @@ def run(
                 ],
             }
             if config.telegram_send_tiktok:
-                try:
-                    send_files_to_telegram(
-                        bot_token=config.telegram_bot_token,
-                        chat_id=config.telegram_chat_id,
-                        file_paths=[item.output_path for item in tiktok_results],
-                        caption_prefix="TikTok cuts",
-                    )
-                    report_payload["tiktok"]["telegram_sent"] = True
-                except Exception as telegram_exc:  # noqa: BLE001
-                    logger.warning("TIKTOK: failed to send clips to Telegram: %s", telegram_exc)
-                    report_payload["tiktok"]["telegram_sent"] = False
-                    report_payload["tiktok"]["telegram_error"] = str(telegram_exc)
+                report_payload["tiktok"]["telegram_sent"] = False
+                report_payload["tiktok"]["telegram_note"] = (
+                    "TELEGRAM_SEND_TIKTOK does not upload clip files; "
+                    "YouTube Shorts links are sent via publish-with-shorts / run-publish-with-shorts."
+                )
         else:
             report_payload["tiktok"] = {"enabled": False}
 

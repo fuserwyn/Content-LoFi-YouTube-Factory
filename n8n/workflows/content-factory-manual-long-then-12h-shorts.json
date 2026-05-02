@@ -1,0 +1,279 @@
+{
+  "name": "Content Factory - manual 1st long, then every 12h short or next long",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "custom",
+              "cronExpression": "0 */12 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-12h-node",
+      "name": "Every 12 hours",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger-node",
+      "name": "Manual — first long only",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 520]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nsd.entrySource = 'cron';\nreturn [{ json: {} }];"
+      },
+      "id": "mark-cron-node",
+      "name": "Mark entry cron",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nsd.entrySource = 'manual';\nreturn [{ json: {} }];"
+      },
+      "id": "mark-manual-node",
+      "name": "Mark entry manual",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 520]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.CONTENT_FACTORY_BASE_URL || '').replace(/\\/+$/, '') + '/tracks' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-get-tracks",
+      "name": "GET tracks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Orchestration state: $getWorkflowStaticData('global')\n// pendingShorts: [{ path, index }], nextLongTrackIndex, mainMeta\n// Manual: only when nextLongTrackIndex===0 and no pending shorts (first long).\n// Cron: publishes one short if queue non-empty; else renders next long (after manual kicked track 0).\n\nconst sd = $getWorkflowStaticData('global');\nconst entry = sd.entrySource || 'cron';\nconst tracks = $input.first().json.tracks || [];\n\nif (!tracks.length) {\n  return [];\n}\n\nsd.pendingShorts = sd.pendingShorts || [];\nsd.nextLongTrackIndex = sd.nextLongTrackIndex ?? 0;\nsd.mainMeta = sd.mainMeta || { title: '', description: '', tags: [] };\n\nif (entry === 'manual') {\n  if (sd.pendingShorts.length > 0) return [];\n  if (sd.nextLongTrackIndex !== 0) return [];\n}\n\nif (sd.pendingShorts.length > 0) {\n  const head = sd.pendingShorts[0];\n  const meta = sd.mainMeta;\n  return [{\n    json: {\n      kind: 'publish',\n      publishBody: {\n        short_path: head.path,\n        main_title: meta.title || 'Short',\n        description: meta.description || '',\n        tags: Array.isArray(meta.tags) ? meta.tags : [],\n        short_index: typeof head.index === 'number' ? head.index : 0,\n        shorts_privacy_status: 'public',\n        cleanup_after: true\n      }\n    }\n  }];\n}\n\nif (sd.nextLongTrackIndex >= tracks.length) {\n  return [];\n}\n\nif (entry === 'cron' && sd.nextLongTrackIndex === 0) {\n  return [];\n}\n\nconst idx = sd.nextLongTrackIndex;\nconst track = tracks[idx];\nconst themes = ['Lake Meditation', 'Ocean Calm', 'Forest Chill', 'River Focus', 'Night Study'];\nconst tagSets = [\n  ['nature', 'forest', 'lofi'],\n  ['ocean', 'waves', 'chill'],\n  ['rain', 'ambient', 'study'],\n  ['river', 'calm', 'focus'],\n  ['night', 'lofi', 'beats']\n];\nconst theme = themes[idx % themes.length];\nconst tags = tagSets[idx % tagSets.length];\n\nreturn [{\n  json: {\n    kind: 'render',\n    renderBody: {\n      track,\n      allow_recent_preferred: false,\n      tags,\n      theme,\n      publish_at_iso: new Date().toISOString(),\n      shorts_count: 3,\n      short_publish_offset_hours: [12, 24, 36],\n      shorts_use_main_track_thirds: true,\n      main_privacy_status: 'public',\n      shorts_privacy_status: 'public',\n      cleanup_source_after_publish: true,\n      cleanup_shorts_after_upload: true,\n      clip_seconds: 30\n    }\n  }\n}];"
+      },
+      "id": "router-node",
+      "name": "Route: render long vs publish short",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if-kind-render",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "render",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-render-node",
+      "name": "If kind is render",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONTENT_FACTORY_WORKFLOW_RENDER_URL || (($env.CONTENT_FACTORY_BASE_URL || '').replace(/\\/+$/, '') + '/workflow/render-main-and-shorts') }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.renderBody) }}"
+      },
+      "id": "http-render-main",
+      "name": "POST render-main-and-shorts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json;\nconst sd = $getWorkflowStaticData('global');\nconst w = body.workflow || {};\nconst files = w.shorts_files || [];\nsd.pendingShorts = files.map((f) => ({ path: f.path, index: f.index }));\nconst mm = w.main_meta || {};\nsd.mainMeta = {\n  title: mm.title || '',\n  description: mm.description || '',\n  tags: Array.isArray(mm.tags) ? mm.tags : []\n};\nsd.nextLongTrackIndex = (sd.nextLongTrackIndex ?? 0) + 1;\nreturn [{ json: { committed: 'render', shortsQueued: sd.pendingShorts.length, nextLongTrackIndex: sd.nextLongTrackIndex } }];"
+      },
+      "id": "commit-render-node",
+      "name": "Commit after long render",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if-kind-publish",
+              "leftValue": "={{ $json.kind }}",
+              "rightValue": "publish",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-publish-node",
+      "name": "If kind is publish",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 520]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONTENT_FACTORY_PUBLISH_SHORT_URL || (($env.CONTENT_FACTORY_BASE_URL || '').replace(/\\/+$/, '') + '/workflow/publish-short') }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.publishBody) }}"
+      },
+      "id": "http-publish-short",
+      "name": "POST publish-short",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 520]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nif (sd.pendingShorts && sd.pendingShorts.length) {\n  sd.pendingShorts.shift();\n}\nreturn [{ json: { committed: 'publish', remainingShorts: sd.pendingShorts.length } }];"
+      },
+      "id": "commit-publish-node",
+      "name": "Commit after short upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 520]
+    }
+  ],
+  "connections": {
+    "Every 12 hours": {
+      "main": [[{ "node": "Mark entry cron", "type": "main", "index": 0 }]]
+    },
+    "Manual — first long only": {
+      "main": [[{ "node": "Mark entry manual", "type": "main", "index": 0 }]]
+    },
+    "Mark entry cron": {
+      "main": [[{ "node": "GET tracks", "type": "main", "index": 0 }]]
+    },
+    "Mark entry manual": {
+      "main": [[{ "node": "GET tracks", "type": "main", "index": 0 }]]
+    },
+    "GET tracks": {
+      "main": [[{ "node": "Route: render long vs publish short", "type": "main", "index": 0 }]]
+    },
+    "Route: render long vs publish short": {
+      "main": [[{ "node": "If kind is render", "type": "main", "index": 0 }]]
+    },
+    "If kind is render": {
+      "main": [
+        [
+          {
+            "node": "POST render-main-and-shorts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If kind is publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST render-main-and-shorts": {
+      "main": [[{ "node": "Commit after long render", "type": "main", "index": 0 }]]
+    },
+    "If kind is publish": {
+      "main": [
+        [
+          {
+            "node": "POST publish-short",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "POST publish-short": {
+      "main": [[{ "node": "Commit after short upload", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}

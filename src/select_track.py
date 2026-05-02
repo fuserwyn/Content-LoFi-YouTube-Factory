@@ -5,6 +5,28 @@ import logging
 
 SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a"}
 
+
+def list_track_basenames_sorted(tracks_dir: Path) -> list[str]:
+    """Sorted display order for staggered multi-track campaigns (one long video per track)."""
+    paths = [
+        p
+        for p in tracks_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
+    ]
+    return sorted({p.name for p in paths})
+
+
+def next_track_basename_after(current_track_path: Path, tracks_dir: Path) -> str | None:
+    """Next filename after current (sorted); None if no files or current is last."""
+    names = list_track_basenames_sorted(tracks_dir)
+    if not names:
+        return None
+    cur = current_track_path.name
+    if cur not in names:
+        return names[0]
+    idx = names.index(cur)
+    return names[idx + 1] if idx + 1 < len(names) else None
+
 LOGGER = logging.getLogger("content_factory")
 
 
