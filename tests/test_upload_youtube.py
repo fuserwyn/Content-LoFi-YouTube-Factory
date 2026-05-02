@@ -88,6 +88,42 @@ def test_upload_video_builds_youtube_client(tmp_path: Path, mocker) -> None:
     mocks["build"].assert_called_once_with("youtube", "v3", credentials=mocks["credentials_instance"])
 
 
+def test_upload_video_passes_target_channel_to_insert(tmp_path: Path, mocker) -> None:
+    video_path = tmp_path / "test.mp4"
+    video_path.write_bytes(b"fake video")
+    meta = VideoMeta(title="T", description="D", tags=["t"])
+    mocks = _setup_youtube_mocks(mocker)
+    upload_video(
+        video_path=video_path,
+        meta=meta,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        refresh_token="test_refresh_token",
+        channel_id=" UC_target_channel ",
+    )
+    mocks["videos"].insert.assert_called_once()
+    call_kwargs = mocks["videos"].insert.call_args[1]
+    assert call_kwargs["onBehalfOfContentOwnerChannel"] == "UC_target_channel"
+
+
+def test_upload_video_omits_channel_when_blank(tmp_path: Path, mocker) -> None:
+    video_path = tmp_path / "test.mp4"
+    video_path.write_bytes(b"fake video")
+    meta = VideoMeta(title="T", description="D", tags=["t"])
+    mocks = _setup_youtube_mocks(mocker)
+    upload_video(
+        video_path=video_path,
+        meta=meta,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        refresh_token="test_refresh_token",
+        channel_id="   ",
+    )
+    mocks["videos"].insert.assert_called_once()
+    call_kwargs = mocks["videos"].insert.call_args[1]
+    assert "onBehalfOfContentOwnerChannel" not in call_kwargs
+
+
 def test_upload_video_constructs_metadata(tmp_path: Path, mocker) -> None:
     video_path = tmp_path / "test.mp4"
     video_path.write_bytes(b"fake video")

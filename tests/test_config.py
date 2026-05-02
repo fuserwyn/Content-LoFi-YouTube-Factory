@@ -38,9 +38,30 @@ def test_load_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.pexels_api_key == "test_pexels"
     assert config.content_tags == ["nature", "surf"]
     assert config.upload_enabled is False
+    assert config.youtube_upload_channel_id == ""
     assert os.path.isdir(config.assets_tracks_dir)
     assert os.path.isdir(config.assets_source_videos_dir)
     assert config.run_mode == "oneshot"
+
+
+def test_load_config_upload_channel_prefers_primary_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in REQUIRED_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("YOUTUBE_UPLOAD_CHANNEL_ID", "UC_primary")
+    monkeypatch.setenv("YOUTUBE_CHANNEL_ID", "UC_legacy")
+
+    config = load_config()
+    assert config.youtube_upload_channel_id == "UC_primary"
+
+
+def test_load_config_upload_channel_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in REQUIRED_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("YOUTUBE_UPLOAD_CHANNEL_ID", raising=False)
+    monkeypatch.setenv("YOUTUBE_CHANNEL_ID", "UC_legacy_only")
+
+    config = load_config()
+    assert config.youtube_upload_channel_id == "UC_legacy_only"
 
 
 def test_load_config_rejects_invalid_run_mode(monkeypatch: pytest.MonkeyPatch) -> None:

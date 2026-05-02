@@ -11,6 +11,7 @@ class AppConfig:
     youtube_client_id: str
     youtube_client_secret: str
     youtube_refresh_token: str
+    youtube_upload_channel_id: str
     youtube_default_privacy: str
     youtube_category_id: str
     youtube_default_language: str
@@ -151,6 +152,11 @@ def load_config() -> AppConfig:
         youtube_client_id=_require_env("YOUTUBE_CLIENT_ID"),
         youtube_client_secret=_require_env("YOUTUBE_CLIENT_SECRET"),
         youtube_refresh_token=_require_env("YOUTUBE_REFRESH_TOKEN"),
+        youtube_upload_channel_id=_env_with_fallback(
+            "YOUTUBE_UPLOAD_CHANNEL_ID",
+            "YOUTUBE_CHANNEL_ID",
+            "",
+        ).strip(),
         youtube_default_privacy=os.getenv("YOUTUBE_DEFAULT_PRIVACY", "private"),
         youtube_category_id=os.getenv("YOUTUBE_CATEGORY_ID", "10"),
         youtube_default_language=os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "en"),
