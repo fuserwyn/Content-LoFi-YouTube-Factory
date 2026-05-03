@@ -17,6 +17,7 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         youtube_refresh_token_alt="",
         youtube_upload_channel_id="",
         youtube_content_owner_id="",
+        youtube_use_on_behalf_upload=False,
         youtube_default_privacy="private",
         youtube_category_id="10",
         youtube_default_language="en",

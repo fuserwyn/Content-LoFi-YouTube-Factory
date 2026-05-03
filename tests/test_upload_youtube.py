@@ -101,6 +101,7 @@ def test_upload_video_passes_target_channel_to_insert(tmp_path: Path, mocker) ->
         refresh_token="test_refresh_token",
         channel_id=" UC_target_channel ",
         content_owner_id=" content_owner_123 ",
+        use_on_behalf_upload=True,
     )
     mocks["videos"].insert.assert_called_once()
     call_kwargs = mocks["videos"].insert.call_args[1]

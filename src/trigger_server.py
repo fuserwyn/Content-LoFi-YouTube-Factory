@@ -509,6 +509,7 @@ def workflow_publish_short_impl(
         publish_at_iso=publish_at,
         channel_id=config.youtube_upload_channel_id,
         content_owner_id=config.youtube_content_owner_id,
+        use_on_behalf_upload=config.youtube_use_on_behalf_upload,
     )
     if config.telegram_bot_token and config.telegram_chat_id:
         send_message_to_telegram(
@@ -658,6 +659,7 @@ def start_trigger_server(config: AppConfig) -> None:
                 ),
                 channel_id=config.youtube_upload_channel_id,
                 content_owner_id=config.youtube_content_owner_id,
+                use_on_behalf_upload=config.youtube_use_on_behalf_upload,
             )
             short_url = f"https://www.youtube.com/shorts/{upload_result.video_id}"
             uploaded_shorts.append(
