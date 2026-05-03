@@ -27,6 +27,8 @@ def upload_video(
     publish_at_iso: str = "",
     channel_id: str = "",
     content_owner_id: str = "",
+    *,
+    use_on_behalf_upload: bool = False,
 ) -> UploadResult:
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
@@ -76,9 +78,14 @@ def upload_video(
         "body": body,
         "media_body": MediaFileUpload(str(video_path), chunksize=-1, resumable=True),
     }
-    if owner and upload_channel:
+    if owner and upload_channel and use_on_behalf_upload:
         insert_kwargs["onBehalfOfContentOwner"] = owner
         insert_kwargs["onBehalfOfContentOwnerChannel"] = upload_channel
+    elif owner and upload_channel and not use_on_behalf_upload:
+        logger.debug(
+            "youtube_upload: onBehalfOf* skipped (use_on_behalf_upload=false); "
+            "video goes to the channel linked to the OAuth refresh token."
+        )
 
     request = youtube.videos().insert(**insert_kwargs)
     response = request.execute()
