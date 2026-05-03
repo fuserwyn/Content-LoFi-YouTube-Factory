@@ -97,17 +97,16 @@
             "version": 2,
             "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
-              "id": "if-ready-true",
-              "leftValue": "={{ $json.ready }}",
-              "rightValue": true,
+              "id": "if-publish-int",
+              "leftValue": "={{ $json.publish_int }}",
+              "rightValue": 1,
               "operator": {
-                "type": "boolean",
-                "operation": "equals",
-                "singleValue": true
+                "type": "number",
+                "operation": "equals"
               }
             }
           ],
@@ -130,21 +129,11 @@
             "version": 2,
             "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
-              "id": "c1",
-              "leftValue": "={{ $json.ready }}",
-              "rightValue": false,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals",
-                "singleValue": true
-              }
-            },
-            {
-              "id": "c2",
+              "id": "reason-before",
               "leftValue": "={{ $json.reason }}",
               "rightValue": "before_deadline",
               "operator": {
@@ -152,14 +141,24 @@
                 "operation": "equals",
                 "name": "filter.operator.equals"
               }
+            },
+            {
+              "id": "reason-inprog",
+              "leftValue": "={{ $json.reason }}",
+              "rightValue": "publish_in_progress",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
             }
           ],
-          "combinator": "and"
+          "combinator": "or"
         }
       },
       "id": "if-before-short-deadline",
       "name": "If waiting for short deadline only",
-      "notes": "ready=false + reason=before_deadline → не трогаем GET tracks (не стартуем следующий лонг).",
+      "notes": "reason before_deadline | publish_in_progress → не GET tracks.",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [

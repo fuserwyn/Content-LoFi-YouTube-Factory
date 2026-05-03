@@ -31,6 +31,7 @@ def test_persist_peek_ack_flow(data_dir: Path) -> None:
     t0 = int(time.time() * 1000)
     r0 = peek_next_job(data_dir, gap)
     assert r0["ready"] is False
+    assert r0["publish_int"] == 0
     assert r0["reason"] == "before_deadline"
 
     path = data_dir / "n8n_short_publish_queue.json"
@@ -40,7 +41,11 @@ def test_persist_peek_ack_flow(data_dir: Path) -> None:
 
     r1 = peek_next_job(data_dir, gap)
     assert r1["ready"] is True
+    assert r1["publish_int"] == 1
     assert r1["publishBody"]["short_path"] == "/tmp/s0.mp4"
+
+    r1b = peek_next_job(data_dir, gap)
+    assert r1b["reason"] == "publish_in_progress"
 
     a1 = ack_publish(data_dir, gap)
     assert a1["ok"] is True

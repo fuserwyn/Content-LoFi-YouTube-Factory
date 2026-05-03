@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 _QUEUE_FILE = "n8n_short_publish_queue.json"
 _LOCK_FILE = "n8n_short_publish_queue.lock"
-_STALE_IN_FLIGHT_MS = 45 * 60 * 1000
+_PUBLISH_LOCK_MS = 15 * 60 * 1000
 
 
 def _queue_path(data_dir: Path) -> Path:
@@ -77,60 +80,88 @@ def persist_queue_after_render(data_dir: Path, workflow_result: dict[str, Any], 
         },
         "shorts": shorts,
         "next_publish_after_ms": now + gap if shorts else None,
-        "in_flight": None,
+        "publish_lock_ms": None,
     }
     with _file_lock(data_dir):
         _atomic_write(_queue_path(data_dir), json.dumps(state, ensure_ascii=False))
+    logger.info(
+        "n8n_short_queue: persisted after render | shorts=%d next_publish_after_ms=%s",
+        len(shorts),
+        state.get("next_publish_after_ms"),
+    )
+    if not shorts:
+        logger.warning(
+            "n8n_short_queue: no shorts in workflow_result — queue empty (check create_tiktok_cuts / shorts_count)"
+        )
+
+
+def _peek_envelope(payload: dict[str, Any]) -> dict[str, Any]:
+    """n8n-friendly: strict If on booleans often fails; use publish_int === 1."""
+    out = dict(payload)
+    out["publish_int"] = 1 if out.get("ready") is True else 0
+    return out
 
 
 def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
-    """Always JSON 200: { ready, reason?, publishBody?, wait_ms? }."""
-    gap = max(0, gap_ms)
+    """Read-only peek. Always JSON 200: { ready, publish_int, reason?, publishBody?, wait_ms? }.
+
+    No in-flight mutation: n8n may retry peek until POST publish-short + ack succeed.
+    """
+    _ = gap_ms
     with _file_lock(data_dir):
         path = _queue_path(data_dir)
         if not path.is_file():
-            return {"ready": False, "reason": "no_queue"}
+            logger.debug("n8n_short_queue: peek no_queue_file")
+            return _peek_envelope({"ready": False, "reason": "no_queue"})
         state = json.loads(path.read_text(encoding="utf-8"))
         shorts: list[dict[str, Any]] = list(state.get("shorts") or [])
         now = _now_ms()
-        inflight = state.get("in_flight")
-
-        if inflight and isinstance(inflight, dict):
-            started = int(inflight.get("started_ms", 0))
-            if now - started < _STALE_IN_FLIGHT_MS:
-                meta = state.get("main_meta") or {}
-                fake_short = {
-                    "path": inflight.get("path", ""),
-                    "index": int(inflight.get("index", 0)),
-                }
-                pb = _build_publish_body(meta, fake_short)
-                return {"ready": True, "publishBody": pb, "resume_in_flight": True}
-            state["in_flight"] = None
 
         if not shorts:
-            _atomic_write(path, json.dumps(state, ensure_ascii=False))
-            return {"ready": False, "reason": "queue_empty"}
+            return _peek_envelope({"ready": False, "reason": "queue_empty"})
 
         next_after = state.get("next_publish_after_ms")
         if next_after is not None and now < int(next_after):
-            return {
-                "ready": False,
-                "reason": "before_deadline",
-                "wait_ms": int(next_after) - now,
-            }
+            w = int(next_after) - now
+            logger.debug("n8n_short_queue: peek before_deadline wait_ms=%s", w)
+            return _peek_envelope(
+                {
+                    "ready": False,
+                    "reason": "before_deadline",
+                    "wait_ms": w,
+                }
+            )
+
+        plock = state.get("publish_lock_ms")
+        if plock is not None:
+            age = now - int(plock)
+            if age < _PUBLISH_LOCK_MS:
+                w = _PUBLISH_LOCK_MS - age
+                logger.debug("n8n_short_queue: peek publish_in_progress wait_ms=%s", w)
+                return _peek_envelope(
+                    {
+                        "ready": False,
+                        "reason": "publish_in_progress",
+                        "wait_ms": w,
+                    }
+                )
+            state["publish_lock_ms"] = None
 
         head = shorts[0]
-        state["in_flight"] = {
-            "path": head["path"],
-            "index": int(head.get("index", 0)),
-            "started_ms": now,
-        }
-        _atomic_write(path, json.dumps(state, ensure_ascii=False))
         meta = state.get("main_meta") or {}
-        return {"ready": True, "publishBody": _build_publish_body(meta, head)}
+        state["publish_lock_ms"] = now
+        _atomic_write(path, json.dumps(state, ensure_ascii=False))
+        out = {"ready": True, "publishBody": _build_publish_body(meta, head)}
+        logger.info(
+            "n8n_short_queue: peek ready | short_index=%s path=%s",
+            head.get("index"),
+            head.get("path"),
+        )
+        return _peek_envelope(out)
 
 
 def ack_publish(data_dir: Path, gap_ms: int) -> dict[str, Any]:
+    """Pop front short after successful YouTube upload (call once per publish)."""
     gap = max(0, gap_ms)
     with _file_lock(data_dir):
         path = _queue_path(data_dir)
@@ -138,23 +169,12 @@ def ack_publish(data_dir: Path, gap_ms: int) -> dict[str, Any]:
             return {"ok": False, "remaining": 0, "all_shorts_done": True}
         state = json.loads(path.read_text(encoding="utf-8"))
         shorts: list[dict[str, Any]] = list(state.get("shorts") or [])
-        inflight = state.get("in_flight")
-        if not inflight or not shorts:
-            state["in_flight"] = None
-            _atomic_write(path, json.dumps(state, ensure_ascii=False))
-            return {"ok": False, "remaining": len(shorts), "all_shorts_done": len(shorts) == 0}
-
-        head = shorts[0]
-        if str(head.get("path")) != str(inflight.get("path")) or int(head.get("index", 0)) != int(
-            inflight.get("index", 0)
-        ):
-            state["in_flight"] = None
-            _atomic_write(path, json.dumps(state, ensure_ascii=False))
-            return {"ok": False, "remaining": len(shorts), "all_shorts_done": False}
+        if not shorts:
+            return {"ok": False, "remaining": 0, "all_shorts_done": True}
 
         shorts.pop(0)
         state["shorts"] = shorts
-        state["in_flight"] = None
+        state["publish_lock_ms"] = None
         now = _now_ms()
         if shorts:
             state["next_publish_after_ms"] = now + gap
@@ -162,4 +182,5 @@ def ack_publish(data_dir: Path, gap_ms: int) -> dict[str, Any]:
             state["next_publish_after_ms"] = None
         _atomic_write(path, json.dumps(state, ensure_ascii=False))
         remaining = len(shorts)
+        logger.info("n8n_short_queue: ack | remaining=%s all_done=%s", remaining, remaining == 0)
         return {"ok": True, "remaining": remaining, "all_shorts_done": remaining == 0}
