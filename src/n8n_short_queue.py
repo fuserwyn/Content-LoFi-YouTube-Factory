@@ -10,7 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+# Same logger as trigger_server / render so Railway logs show queue lines under `content_factory`.
+logger = logging.getLogger("content_factory")
 
 _QUEUE_FILE = "n8n_short_publish_queue.json"
 _LOCK_FILE = "n8n_short_publish_queue.lock"
@@ -84,14 +85,20 @@ def persist_queue_after_render(data_dir: Path, workflow_result: dict[str, Any], 
     }
     with _file_lock(data_dir):
         _atomic_write(_queue_path(data_dir), json.dumps(state, ensure_ascii=False))
+    gap_h = gap / 3_600_000
     logger.info(
-        "n8n_short_queue: persisted after render | shorts=%d next_publish_after_ms=%s",
+        "WORKFLOW: n8n short publish queue persisted | shorts=%d gap_ms=%d (~%.2fh) "
+        "next_publish_after_ms=%s | GET n8n-short-publish-next returns ready=false "
+        "(before_deadline) until then. Cron frequency does not shorten this gap. "
+        "Тест 1 мин: N8N_SHORT_PUBLISH_GAP_MS=60000 на Railway.",
         len(shorts),
+        gap,
+        gap_h,
         state.get("next_publish_after_ms"),
     )
     if not shorts:
         logger.warning(
-            "n8n_short_queue: no shorts in workflow_result — queue empty (check create_tiktok_cuts / shorts_count)"
+            "WORKFLOW: n8n short publish queue empty (no shorts in render result; check cuts / shorts_count)"
         )
 
 
@@ -111,7 +118,7 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
     with _file_lock(data_dir):
         path = _queue_path(data_dir)
         if not path.is_file():
-            logger.debug("n8n_short_queue: peek no_queue_file")
+            logger.debug("n8n short queue peek: no_queue_file")
             return _peek_envelope({"ready": False, "reason": "no_queue"})
         state = json.loads(path.read_text(encoding="utf-8"))
         shorts: list[dict[str, Any]] = list(state.get("shorts") or [])
@@ -123,7 +130,7 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
         next_after = state.get("next_publish_after_ms")
         if next_after is not None and now < int(next_after):
             w = int(next_after) - now
-            logger.debug("n8n_short_queue: peek before_deadline wait_ms=%s", w)
+            logger.debug("n8n short queue peek: before_deadline wait_ms=%s", w)
             return _peek_envelope(
                 {
                     "ready": False,
@@ -137,7 +144,7 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
             age = now - int(plock)
             if age < _PUBLISH_LOCK_MS:
                 w = _PUBLISH_LOCK_MS - age
-                logger.debug("n8n_short_queue: peek publish_in_progress wait_ms=%s", w)
+                logger.debug("n8n short queue peek: publish_in_progress wait_ms=%s", w)
                 return _peek_envelope(
                     {
                         "ready": False,
@@ -153,7 +160,7 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
         _atomic_write(path, json.dumps(state, ensure_ascii=False))
         out = {"ready": True, "publishBody": _build_publish_body(meta, head)}
         logger.info(
-            "n8n_short_queue: peek ready | short_index=%s path=%s",
+            "WORKFLOW: n8n short publish peek ready | short_index=%s path=%s",
             head.get("index"),
             head.get("path"),
         )
@@ -182,5 +189,5 @@ def ack_publish(data_dir: Path, gap_ms: int) -> dict[str, Any]:
             state["next_publish_after_ms"] = None
         _atomic_write(path, json.dumps(state, ensure_ascii=False))
         remaining = len(shorts)
-        logger.info("n8n_short_queue: ack | remaining=%s all_done=%s", remaining, remaining == 0)
+        logger.info("WORKFLOW: n8n short publish ack | remaining=%s all_done=%s", remaining, remaining == 0)
         return {"ok": True, "remaining": remaining, "all_shorts_done": remaining == 0}
