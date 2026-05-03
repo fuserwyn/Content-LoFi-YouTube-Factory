@@ -5,12 +5,17 @@ import os
 from dotenv import load_dotenv
 
 
+_DEFAULT_YOUTUBE_OAUTH_PROFILES = frozenset({"", "default", "primary", "main", "1"})
+_ALT_YOUTUBE_OAUTH_PROFILES = frozenset({"alt", "secondary", "second", "2", "channel2", "other"})
+
+
 @dataclass
 class AppConfig:
     pexels_api_key: str
     youtube_client_id: str
     youtube_client_secret: str
     youtube_refresh_token: str
+    youtube_refresh_token_alt: str
     youtube_upload_channel_id: str
     youtube_content_owner_id: str
     youtube_default_privacy: str
@@ -72,6 +77,14 @@ class AppConfig:
     poyo_failed_statuses: list[str]
     poyo_poll_interval_seconds: int
     poyo_max_wait_seconds: int
+    video_generation_provider: str
+    minimax_api_key: str
+    minimax_api_base_url: str
+    minimax_video_model: str
+    minimax_video_duration: int
+    minimax_video_resolution: str
+    minimax_poll_interval_seconds: int
+    minimax_max_wait_seconds: int
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -84,6 +97,28 @@ def _require_env(name: str, default: str | None = None) -> str:
 def _parse_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name, str(default)).strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def resolve_youtube_refresh_token(config: AppConfig, profile: str | None) -> str:
+    """Pick refresh token for multi-channel uploads in one process.
+
+    * default / omitted / primary → ``YOUTUBE_REFRESH_TOKEN``
+    * alt / secondary / 2 / … → ``YOUTUBE_REFRESH_TOKEN_ALT``
+    """
+    raw = profile.strip() if isinstance(profile, str) else ""
+    key = (raw or "default").strip().lower()
+    if key in _DEFAULT_YOUTUBE_OAUTH_PROFILES:
+        return config.youtube_refresh_token.strip()
+    if key in _ALT_YOUTUBE_OAUTH_PROFILES:
+        alt = (config.youtube_refresh_token_alt or "").strip()
+        if not alt:
+            raise ValueError(
+                "youtube_oauth_profile is 'alt' but YOUTUBE_REFRESH_TOKEN_ALT is empty"
+            )
+        return alt
+    raise ValueError(
+        f"Invalid youtube_oauth_profile {profile!r}; use 'default' or 'alt' (or omit for default)"
+    )
 
 
 def _env_with_fallback(primary: str, fallback: str, default: str) -> str:
@@ -127,6 +162,10 @@ def load_config() -> AppConfig:
     if run_mode not in {"oneshot", "webhook"}:
         raise ValueError("RUN_MODE must be either 'oneshot' or 'webhook'")
 
+    video_generation_provider = os.getenv("VIDEO_GENERATION_PROVIDER", "poyo").strip().lower() or "poyo"
+    if video_generation_provider not in {"poyo", "minimax"}:
+        raise ValueError("VIDEO_GENERATION_PROVIDER must be either 'poyo' or 'minimax'")
+
     resolved_tiktok_output_dir = Path(os.getenv("TIKTOK_OUTPUT_DIR", str(tiktok_output_dir)))
     resolved_tiktok_output_dir.mkdir(parents=True, exist_ok=True)
     poyo_ready_statuses = [
@@ -153,6 +192,7 @@ def load_config() -> AppConfig:
         youtube_client_id=_require_env("YOUTUBE_CLIENT_ID"),
         youtube_client_secret=_require_env("YOUTUBE_CLIENT_SECRET"),
         youtube_refresh_token=_require_env("YOUTUBE_REFRESH_TOKEN"),
+        youtube_refresh_token_alt=os.getenv("YOUTUBE_REFRESH_TOKEN_ALT", "").strip(),
         youtube_upload_channel_id=_env_with_fallback(
             "YOUTUBE_UPLOAD_CHANNEL_ID",
             "YOUTUBE_CHANNEL_ID",
@@ -231,5 +271,20 @@ def load_config() -> AppConfig:
         poyo_max_wait_seconds=max(
             10,
             int(_env_with_fallback("POYO_SEEDANCE_MAX_WAIT_SECONDS", "POYO_MAX_WAIT_SECONDS", "600")),
+        ),
+        video_generation_provider=video_generation_provider,
+        minimax_api_key=os.getenv("MINIMAX_API_KEY", "").strip(),
+        minimax_api_base_url=os.getenv("MINIMAX_API_BASE_URL", "https://api.minimax.io").strip().rstrip("/")
+        or "https://api.minimax.io",
+        minimax_video_model=os.getenv("MINIMAX_VIDEO_MODEL", "MiniMax-Hailuo-02").strip() or "MiniMax-Hailuo-02",
+        minimax_video_duration=max(1, int(os.getenv("MINIMAX_VIDEO_DURATION", "10").strip() or "10")),
+        minimax_video_resolution=os.getenv("MINIMAX_VIDEO_RESOLUTION", "768P").strip().upper() or "768P",
+        minimax_poll_interval_seconds=max(
+            5,
+            int(os.getenv("MINIMAX_POLL_INTERVAL_SECONDS", "10").strip() or "10"),
+        ),
+        minimax_max_wait_seconds=max(
+            60,
+            int(os.getenv("MINIMAX_MAX_WAIT_SECONDS", "600").strip() or "600"),
         ),
     )

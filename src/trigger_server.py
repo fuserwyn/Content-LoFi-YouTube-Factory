@@ -9,13 +9,13 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
 
-from .config import AppConfig
+from .config import AppConfig, resolve_youtube_refresh_token
 from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
 from .main import PexelsRenderBundle, _cleanup_temp_files, render_pexels_track_bundle, run as pipeline_run
 from .state_store import RunRecord, create_state_store
 from .notify_telegram import send_message_to_telegram
-from .poyo_video import generate_and_download_poyo_video
+from .video_generation import generate_external_video
 from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import create_tiktok_cuts
 from .upload_youtube import upload_video
@@ -59,6 +59,10 @@ class PublishVideoWithShortsRequest(BaseModel):
     output_dir: str | None = None
     short_publish_offset_hours: list[float] | None = None
     shorts_use_main_track_thirds: bool = False
+    youtube_oauth_profile: str | None = Field(
+        default=None,
+        description="default | alt — second channel uses YOUTUBE_REFRESH_TOKEN_ALT",
+    )
 
 
 class GeneratePoyoAndPublishRequest(BaseModel):
@@ -80,6 +84,11 @@ class GeneratePoyoAndPublishRequest(BaseModel):
     clip_max_seconds: int | None = None
     tracks_dir: str | None = None
     output_dir: str | None = None
+    poyo_stitch_segments: int = Field(default=1, ge=1, le=4)
+    youtube_oauth_profile: str | None = Field(
+        default=None,
+        description="default | alt — second channel uses YOUTUBE_REFRESH_TOKEN_ALT",
+    )
 
 
 class GeneratePoyoShortsOnlyRequest(BaseModel):
@@ -100,6 +109,11 @@ class GeneratePoyoShortsOnlyRequest(BaseModel):
     clip_max_seconds: int | None = None
     tracks_dir: str | None = None
     output_dir: str | None = None
+    poyo_stitch_segments: int = Field(default=1, ge=1, le=4)
+    youtube_oauth_profile: str | None = Field(
+        default=None,
+        description="default | alt — second channel uses YOUTUBE_REFRESH_TOKEN_ALT",
+    )
 
 
 class WorkflowPublishShortRequest(BaseModel):
@@ -113,6 +127,10 @@ class WorkflowPublishShortRequest(BaseModel):
     shorts_privacy_status: str = "public"
     cleanup_after: bool = True
     publish_at_iso: str | None = None
+    youtube_oauth_profile: str | None = Field(
+        default=None,
+        description="default | alt — second channel uses YOUTUBE_REFRESH_TOKEN_ALT",
+    )
 
 
 class RunPublishWithShortsRequest(BaseModel):
@@ -137,6 +155,10 @@ class RunPublishWithShortsRequest(BaseModel):
     clip_max_seconds: int | None = None
     tracks_dir: str | None = None
     output_dir: str | None = None
+    youtube_oauth_profile: str | None = Field(
+        default=None,
+        description="default | alt — second channel uses YOUTUBE_REFRESH_TOKEN_ALT",
+    )
 
 
 def _publish_video_request_from_bundle_run(
@@ -164,6 +186,7 @@ def _publish_video_request_from_bundle_run(
         clip_max_seconds=req.clip_max_seconds,
         tracks_dir=req.tracks_dir,
         output_dir=req.output_dir,
+        youtube_oauth_profile=req.youtube_oauth_profile,
     )
 
 
@@ -197,6 +220,11 @@ def publish_main_and_shorts_impl(
         payload.short_interval_hours,
     )
 
+    try:
+        yt_refresh = resolve_youtube_refresh_token(config, payload.youtube_oauth_profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     tags_seed = payload.tags or config.content_tags
     track_for_meta = payload.track_for_metadata
     if track_for_meta:
@@ -209,7 +237,7 @@ def publish_main_and_shorts_impl(
         meta=main_meta,
         client_id=config.youtube_client_id,
         client_secret=config.youtube_client_secret,
-        refresh_token=config.youtube_refresh_token,
+        refresh_token=yt_refresh,
         default_privacy=payload.main_privacy_status,
         category_id=config.youtube_category_id,
         default_language=config.youtube_default_language,
@@ -268,7 +296,7 @@ def publish_main_and_shorts_impl(
             meta=short_meta,
             client_id=config.youtube_client_id,
             client_secret=config.youtube_client_secret,
-            refresh_token=config.youtube_refresh_token,
+            refresh_token=yt_refresh,
             default_privacy=payload.shorts_privacy_status,
             category_id=config.youtube_category_id,
             default_language=config.youtube_default_language,
@@ -357,12 +385,17 @@ def workflow_render_main_and_cut_shorts_impl(
         track_path_meta,
         shorts_count,
     )
+    try:
+        yt_refresh = resolve_youtube_refresh_token(config, payload.youtube_oauth_profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     main_upload = upload_video(
         video_path=source_video_path,
         meta=main_meta,
         client_id=config.youtube_client_id,
         client_secret=config.youtube_client_secret,
-        refresh_token=config.youtube_refresh_token,
+        refresh_token=yt_refresh,
         default_privacy=payload.main_privacy_status,
         category_id=config.youtube_category_id,
         default_language=config.youtube_default_language,
@@ -447,6 +480,11 @@ def workflow_publish_short_impl(
     short_path = Path(payload.short_path)
     if not short_path.is_file():
         raise RuntimeError(f"short file not found: {short_path}")
+    try:
+        yt_refresh = resolve_youtube_refresh_token(config, payload.youtube_oauth_profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     meta = VideoMeta(
         title=f"{payload.main_title[:88]} · Short {payload.short_index + 1}",
         description=payload.description,
@@ -460,7 +498,7 @@ def workflow_publish_short_impl(
         meta=meta,
         client_id=config.youtube_client_id,
         client_secret=config.youtube_client_secret,
-        refresh_token=config.youtube_refresh_token,
+        refresh_token=yt_refresh,
         default_privacy=payload.shorts_privacy_status,
         category_id=config.youtube_category_id,
         default_language=config.youtube_default_language,
@@ -515,9 +553,15 @@ def start_trigger_server(config: AppConfig) -> None:
         clip_max_seconds: int | None,
         tracks_dir_raw: str | None,
         output_dir_raw: str | None,
+        youtube_oauth_profile: str | None = None,
     ) -> dict:
         tracks_dir = _resolve_tracks_dir(tracks_dir_raw, config)
         output_dir = _resolve_path(output_dir_raw, config.tiktok_output_dir)
+        try:
+            yt_refresh = resolve_youtube_refresh_token(config, youtube_oauth_profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         clips_target = max(1, shorts_count)
         effective_clip_seconds = config.tiktok_clip_seconds if clip_seconds is None else clip_seconds
         publish_base = _parse_publish_datetime(publish_at_iso)
@@ -554,7 +598,7 @@ def start_trigger_server(config: AppConfig) -> None:
                 meta=short_meta,
                 client_id=config.youtube_client_id,
                 client_secret=config.youtube_client_secret,
-                refresh_token=config.youtube_refresh_token,
+                refresh_token=yt_refresh,
                 default_privacy=shorts_privacy_status,
                 category_id=config.youtube_category_id,
                 default_language=config.youtube_default_language,
@@ -867,6 +911,8 @@ def start_trigger_server(config: AppConfig) -> None:
 
         try:
             return workflow_publish_short_impl(config=config, logger=logger, payload=payload)
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("TRIGGER: workflow/publish-short failed: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
@@ -952,6 +998,8 @@ def start_trigger_server(config: AppConfig) -> None:
 
         try:
             return _publish_main_and_shorts(payload)
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("TRIGGER: publish-video-with-shorts failed: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
@@ -974,20 +1022,11 @@ def start_trigger_server(config: AppConfig) -> None:
             output_name = (payload.output_filename or f"poyo_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.mp4").strip()
             output_path = (config.data_dir / "poyo_generated" / output_name).resolve()
 
-            generation_result = generate_and_download_poyo_video(
-                api_key=config.poyo_api_key,
-                base_url=config.poyo_api_base_url,
-                generate_path=config.poyo_generate_path,
-                status_path_template=config.poyo_status_path_template,
-                payload=payload.poyo_payload,
+            generation_result = generate_external_video(
+                config=config,
+                poyo_payload=payload.poyo_payload,
                 output_path=output_path,
-                id_field=config.poyo_id_field,
-                status_field=config.poyo_status_field,
-                download_url_field=config.poyo_download_url_field,
-                ready_statuses=config.poyo_ready_statuses,
-                failed_statuses=config.poyo_failed_statuses,
-                poll_interval_seconds=config.poyo_poll_interval_seconds,
-                max_wait_seconds=config.poyo_max_wait_seconds,
+                segment_count=payload.poyo_stitch_segments,
             )
             generated_output_path = Path(str(generation_result.get("output_path", output_path)))
 
@@ -1009,6 +1048,7 @@ def start_trigger_server(config: AppConfig) -> None:
                 clip_max_seconds=payload.clip_max_seconds,
                 tracks_dir=payload.tracks_dir,
                 output_dir=payload.output_dir,
+                youtube_oauth_profile=payload.youtube_oauth_profile,
             )
             publish_result = _publish_main_and_shorts(publish_payload)
 
@@ -1018,6 +1058,8 @@ def start_trigger_server(config: AppConfig) -> None:
                 "generation": generation_result,
                 "publication": publish_result,
             }
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("TRIGGER: generate-poyo-and-publish failed: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
@@ -1040,20 +1082,11 @@ def start_trigger_server(config: AppConfig) -> None:
             output_name = (payload.output_filename or f"poyo_shorts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.mp4").strip()
             output_path = (config.data_dir / "poyo_generated" / output_name).resolve()
 
-            generation_result = generate_and_download_poyo_video(
-                api_key=config.poyo_api_key,
-                base_url=config.poyo_api_base_url,
-                generate_path=config.poyo_generate_path,
-                status_path_template=config.poyo_status_path_template,
-                payload=payload.poyo_payload,
+            generation_result = generate_external_video(
+                config=config,
+                poyo_payload=payload.poyo_payload,
                 output_path=output_path,
-                id_field=config.poyo_id_field,
-                status_field=config.poyo_status_field,
-                download_url_field=config.poyo_download_url_field,
-                ready_statuses=config.poyo_ready_statuses,
-                failed_statuses=config.poyo_failed_statuses,
-                poll_interval_seconds=config.poyo_poll_interval_seconds,
-                max_wait_seconds=config.poyo_max_wait_seconds,
+                segment_count=payload.poyo_stitch_segments,
             )
             generated_output_path = Path(str(generation_result.get("output_path", output_path)))
             shorts_result = _publish_shorts_only(
@@ -1073,6 +1106,7 @@ def start_trigger_server(config: AppConfig) -> None:
                 clip_max_seconds=payload.clip_max_seconds,
                 tracks_dir_raw=payload.tracks_dir,
                 output_dir_raw=payload.output_dir,
+                youtube_oauth_profile=payload.youtube_oauth_profile,
             )
 
             return {
@@ -1081,6 +1115,8 @@ def start_trigger_server(config: AppConfig) -> None:
                 "generation": generation_result,
                 "publication": shorts_result,
             }
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("TRIGGER: generate-poyo-shorts-only failed: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))

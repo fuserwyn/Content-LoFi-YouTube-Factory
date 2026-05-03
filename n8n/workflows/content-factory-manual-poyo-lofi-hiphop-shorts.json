@@ -1,5 +1,5 @@
 {
-  "name": "Content Factory - Manual Poyo LoFi Hip Hop Shorts (AI)",
+  "name": "Content Factory - Manual PoYo Hailuo LoFi Hip Hop Shorts (AI)",
   "nodes": [
     {
       "parameters": {},
@@ -50,21 +50,27 @@
               "type": "string"
             },
             {
-              "id": "seedance-model",
-              "name": "seedance_model",
-              "value": "seedance-2-fast",
+              "id": "video-model",
+              "name": "video_model",
+              "value": "hailuo-2.3",
               "type": "string"
             },
             {
-              "id": "seedance-res",
-              "name": "seedance_resolution",
-              "value": "480p",
+              "id": "hailuo-res",
+              "name": "hailuo_resolution",
+              "value": "768p",
               "type": "string"
             },
             {
-              "id": "seedance-dur",
-              "name": "seedance_duration",
-              "value": "15",
+              "id": "hailuo-dur",
+              "name": "hailuo_duration",
+              "value": "10",
+              "type": "string"
+            },
+            {
+              "id": "poyo-stitch",
+              "name": "poyo_stitch_segments",
+              "value": "2",
               "type": "string"
             },
             {
@@ -88,30 +94,30 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [460, 320],
-      "notes": "Edit prompt_visual / track_for_metadata. seedance_model: set here (Code node cannot use $env on locked-down n8n). To drive from env: switch this field to Expression = {{ $env.POYO_SEEDANCE_MODEL || 'seedance-2-fast' }}"
+      "notes": "PoYo Hailuo 2.3: video_model=hailuo-2.3, hailuo_duration 6|10, hailuo_resolution 768p|1080p (1080p только с duration 6). Подсказка: Code не видит $env — правьте поля здесь."
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const j = $input.first().json;\n// No $env here: many n8n installs block env access inside Code nodes.\nconst model = String(j.seedance_model || 'seedance-2-fast').trim() || 'seedance-2-fast';\nconst rawRes = String(j.seedance_resolution || '480p').trim().toLowerCase() || '480p';\nconst isFast = model.toLowerCase().includes('fast');\nconst candidates = isFast ? ['480p', '720p'] : ['480p', '720p', '1080p'];\nconst resolution = candidates.includes(rawRes) ? rawRes : (isFast ? '480p' : '720p');\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = 'lo-fi hip hop music video aesthetic, chillhop, soft neon palette, cozy mood, slow smooth camera, subtle 35mm grain, no people faces focus, no readable text, no logos, no watermark, vertical cinematic';\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\n// PoYo Seedance 2: duration 4–15 seconds (API)\nconst rawDur = parseInt(String(j.seedance_duration || '15'), 10) || 15;\nconst duration = Math.min(15, Math.max(4, rawDur));\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-lofi-hiphop-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nreturn [{\n  json: {\n    poyo_payload: {\n      model,\n      input: {\n        prompt,\n        aspect_ratio: '9:16',\n        resolution,\n        duration,\n        generate_audio: false,\n      },\n    },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n  },\n}];\n"
+        "jsCode": "const j = $input.first().json;\n// PoYo Hailuo 2.3 — https://docs.poyo.ai (POST /api/generate/submit)\nconst model = String(j.video_model || 'hailuo-2.3').trim() || 'hailuo-2.3';\nlet resolution = String(j.hailuo_resolution || '768p').trim().toLowerCase();\nif (!['768p', '1080p'].includes(resolution)) resolution = '768p';\n\nlet duration = parseInt(String(j.hailuo_duration || '10'), 10);\nif (![6, 10].includes(duration)) duration = duration <= 8 ? 6 : 10;\n// 1080p only supports duration=6 (PoYo docs)\nif (resolution === '1080p' && duration === 10) duration = 6;\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = 'lo-fi hip hop music video aesthetic, chillhop, soft neon palette, cozy mood, slow smooth camera, subtle 35mm grain, no people faces focus, no readable text, no logos, no watermark, vertical cinematic 9:16';\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\nconst poyoStitchSegments = Math.min(4, Math.max(1, parseInt(String(j.poyo_stitch_segments || '1'), 10) || 1));\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-hailuo-lofi-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nconst input = {\n  prompt,\n  duration,\n  resolution,\n  prompt_optimizer: j.hailuo_prompt_optimizer !== false && j.hailuo_prompt_optimizer !== 'false',\n};\nconst startUrl = String(j.hailuo_start_image_url || '').trim();\nif (startUrl) input.start_image_url = startUrl;\n\nreturn [{\n  json: {\n    poyo_payload: { model, input },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n    poyo_stitch_segments: poyoStitchSegments,\n  },\n}];\n"
       },
       "id": "lofi-build-poyo-payload",
       "name": "Build Poyo LoFi Shorts Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [700, 320],
-      "notes": "Does not use $env (blocked in Code sandbox). Model comes from Set → seedance_model."
+      "notes": "PoYo hailuo-2.3 payload. Optional: Set hailuo_start_image_url (URL). hailuo_prompt_optimizer=false to disable."
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$env.CONTENT_FACTORY_POYO_SHORTS_ONLY_URL}}",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/generate-poyo-shorts-only",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "X-Trigger-Key",
-              "value": "={{$env.TRIGGER_API_KEY}}"
+              "value": "420"
             },
             {
               "name": "Content-Type",
@@ -131,7 +137,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [980, 320],
-      "notes": "Poyo + нарезка + загрузка шортов на YouTube. Generation может занять много минут — timeout увеличен."
+      "notes": "Railway production URL + X-Trigger-Key. Не коммитьте реальный секрет в публичный репозиторий — лучше снова вынести в env."
     }
   ],
   "connections": {

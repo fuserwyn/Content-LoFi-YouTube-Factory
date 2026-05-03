@@ -14,6 +14,7 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         youtube_client_id="test_id",
         youtube_client_secret="test_secret",
         youtube_refresh_token="test_token",
+        youtube_refresh_token_alt="",
         youtube_upload_channel_id="",
         youtube_content_owner_id="",
         youtube_default_privacy="private",
@@ -75,6 +76,14 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         poyo_failed_statuses=["failed", "error"],
         poyo_poll_interval_seconds=1,
         poyo_max_wait_seconds=60,
+        video_generation_provider="poyo",
+        minimax_api_key="",
+        minimax_api_base_url="https://api.minimax.io",
+        minimax_video_model="MiniMax-Hailuo-02",
+        minimax_video_duration=10,
+        minimax_video_resolution="768P",
+        minimax_poll_interval_seconds=10,
+        minimax_max_wait_seconds=600,
     )
 
 
@@ -732,7 +741,7 @@ def test_generate_poyo_and_publish_endpoint(tmp_path: Path, mocker) -> None:
     generated_video.write_bytes(b"video")
 
     mocker.patch("src.trigger_server.setup_logger")
-    mock_generate = mocker.patch("src.trigger_server.generate_and_download_poyo_video")
+    mock_generate = mocker.patch("src.trigger_server.generate_external_video")
     mock_generate.return_value = {
         "job_id": "job123",
         "video_url": "https://cdn.example/video.mp4",
@@ -793,7 +802,7 @@ def test_generate_poyo_shorts_only_endpoint(tmp_path: Path, mocker) -> None:
     generated_video.write_bytes(b"video")
 
     mocker.patch("src.trigger_server.setup_logger")
-    mock_generate = mocker.patch("src.trigger_server.generate_and_download_poyo_video")
+    mock_generate = mocker.patch("src.trigger_server.generate_external_video")
     mock_generate.return_value = {
         "job_id": "job-shorts",
         "video_url": "https://cdn.example/video.mp4",

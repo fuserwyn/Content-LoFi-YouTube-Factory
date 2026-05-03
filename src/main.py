@@ -4,12 +4,13 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 import shutil
 import subprocess
 import traceback
 from typing import Any
 
-from .config import AppConfig, load_config
+from .config import AppConfig, load_config, resolve_youtube_refresh_token
 from .fetch_assets import ClipAsset, fetch_and_download_clips, load_local_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
@@ -273,12 +274,14 @@ def run(
 
         if config.upload_enabled:
             logger.info("UPLOAD: uploading to YouTube")
+            profile = os.getenv("YOUTUBE_OAUTH_PROFILE", "").strip() or None
+            refresh_token = resolve_youtube_refresh_token(config, profile)
             upload_result = upload_video(
                 video_path=render_result.output_path,
                 meta=meta,
                 client_id=config.youtube_client_id,
                 client_secret=config.youtube_client_secret,
-                refresh_token=config.youtube_refresh_token,
+                refresh_token=refresh_token,
                 default_privacy=config.youtube_default_privacy,
                 category_id=config.youtube_category_id,
                 default_language=config.youtube_default_language,

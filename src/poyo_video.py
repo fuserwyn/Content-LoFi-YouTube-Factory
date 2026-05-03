@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
+import copy
+import re
+import subprocess
 import time
+from pathlib import Path
 
 import requests
 
@@ -24,6 +27,150 @@ def _get_nested(data: object, dotted_key: str) -> str:
         if current is None:
             return ""
     return "" if current is None else str(current).strip()
+
+
+def _escape_concat_path(path: Path) -> str:
+    """Escape path for ffmpeg concat demuxer single-quoted form."""
+    s = str(path.resolve())
+    return s.replace("'", r"'\''")
+
+
+def concat_mp4_files_ffmpeg(segment_paths: list[Path], output_path: Path, *, timeout_seconds: int = 600) -> None:
+    """Append MP4 segments in order (stream copy). Expects compatible streams from same encoder settings."""
+    if len(segment_paths) < 2:
+        raise ValueError("concat needs at least 2 segment files")
+    for p in segment_paths:
+        if not p.is_file():
+            raise FileNotFoundError(f"missing segment: {p}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    work = segment_paths[0].parent
+    list_file = work / f"_{output_path.stem}_concat.txt"
+    lines = "\n".join(f"file '{_escape_concat_path(p)}'" for p in segment_paths) + "\n"
+    list_file.write_text(lines, encoding="utf-8")
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file.resolve()),
+            "-c",
+            "copy",
+            str(output_path.resolve()),
+        ]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "")[-4000:]
+            raise RuntimeError(f"ffmpeg concat failed (exit {proc.returncode}): {tail}")
+    finally:
+        list_file.unlink(missing_ok=True)
+
+
+def generate_stitched_poyo_videos(
+    *,
+    api_key: str,
+    base_url: str,
+    generate_path: str,
+    status_path_template: str,
+    base_payload: dict,
+    segment_count: int,
+    output_path: Path,
+    id_field: str = "id",
+    status_field: str = "status",
+    download_url_field: str = "video_url",
+    ready_statuses: list[str] | None = None,
+    failed_statuses: list[str] | None = None,
+    poll_interval_seconds: int = 5,
+    max_wait_seconds: int = 600,
+) -> dict:
+    """
+    Run multiple PoYo/Seedance jobs (each up to API max duration, e.g. 15s) and concatenate with ffmpeg.
+
+    Varies ``input.seed`` per segment when possible so clips are not identical.
+    """
+    if segment_count < 1:
+        raise ValueError("segment_count must be >= 1")
+    if segment_count == 1:
+        return generate_and_download_poyo_video(
+            api_key=api_key,
+            base_url=base_url,
+            generate_path=generate_path,
+            status_path_template=status_path_template,
+            payload=base_payload,
+            output_path=output_path,
+            id_field=id_field,
+            status_field=status_field,
+            download_url_field=download_url_field,
+            ready_statuses=ready_statuses,
+            failed_statuses=failed_statuses,
+            poll_interval_seconds=poll_interval_seconds,
+            max_wait_seconds=max_wait_seconds,
+        )
+
+    work = output_path.parent / f".poyo_stitch_{re.sub(r'[^a-zA-Z0-9_-]+', '_', output_path.stem)}"
+    work.mkdir(parents=True, exist_ok=True)
+    segment_paths: list[Path] = []
+    segments_meta: list[dict] = []
+    try:
+        for i in range(segment_count):
+            pl = copy.deepcopy(base_payload)
+            inp = pl.get("input")
+            if not isinstance(inp, dict):
+                inp = {}
+                pl["input"] = inp
+            base_seed = inp.get("seed")
+            if base_seed is None:
+                inp["seed"] = 10_000 + i
+            else:
+                inp["seed"] = int(base_seed) + i
+
+            seg_path = work / f"seg_{i:02d}.mp4"
+            meta = generate_and_download_poyo_video(
+                api_key=api_key,
+                base_url=base_url,
+                generate_path=generate_path,
+                status_path_template=status_path_template,
+                payload=pl,
+                output_path=seg_path,
+                id_field=id_field,
+                status_field=status_field,
+                download_url_field=download_url_field,
+                ready_statuses=ready_statuses,
+                failed_statuses=failed_statuses,
+                poll_interval_seconds=poll_interval_seconds,
+                max_wait_seconds=max_wait_seconds,
+            )
+            segment_paths.append(seg_path)
+            segments_meta.append(meta)
+
+        concat_mp4_files_ffmpeg(segment_paths, output_path)
+    finally:
+        for seg in segment_paths:
+            seg.unlink(missing_ok=True)
+        try:
+            if work.is_dir() and not any(work.iterdir()):
+                work.rmdir()
+        except OSError:
+            pass
+
+    return {
+        "output_path": str(output_path),
+        "stitch_segments": segment_count,
+        "segment_job_ids": [m.get("job_id", "") for m in segments_meta],
+        "segments": segments_meta,
+    }
 
 
 def generate_and_download_poyo_video(

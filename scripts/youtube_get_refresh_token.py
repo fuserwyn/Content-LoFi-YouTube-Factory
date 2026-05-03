@@ -22,7 +22,9 @@ Run (from factory root):
   python scripts/youtube_get_refresh_token.py
 
 Log in in the browser as the Google account that should own uploads
-(second channel → that account). Copy the printed line into your .env.
+(second channel → that account). Copy the printed line into your .env as
+``YOUTUBE_REFRESH_TOKEN`` for the default channel, or ``YOUTUBE_REFRESH_TOKEN_ALT``
+if this token is for the alternate channel (use ``youtube_oauth_profile`` / ``alt`` in API calls).
 """
 from __future__ import annotations
 
