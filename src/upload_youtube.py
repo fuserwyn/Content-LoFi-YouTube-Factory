@@ -4,6 +4,9 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from google.auth.exceptions import RefreshError
+from googleapiclient.errors import HttpError
+
 from .generate_meta import VideoMeta
 
 logger = logging.getLogger(__name__)
@@ -15,7 +18,23 @@ class UploadResult:
     status: str
 
 
-def upload_video(
+def _upload_attempt_would_equal_primary_retry(
+    *,
+    refresh_token: str,
+    primary_refresh_token: str,
+    channel_id: str,
+    content_owner_id: str,
+    use_on_behalf_upload: bool,
+) -> bool:
+    """True if a retry with primary token + default channel would repeat the same request."""
+    upload_channel = channel_id.strip() if channel_id else ""
+    owner = content_owner_id.strip() if content_owner_id else ""
+    uses_on_behalf = bool(owner and upload_channel and use_on_behalf_upload)
+    same_token = refresh_token.strip() == primary_refresh_token.strip()
+    return same_token and not uses_on_behalf
+
+
+def _upload_video_once(
     video_path: Path,
     meta: VideoMeta,
     client_id: str,
@@ -90,3 +109,71 @@ def upload_video(
     request = youtube.videos().insert(**insert_kwargs)
     response = request.execute()
     return UploadResult(video_id=response["id"], status=status["privacyStatus"])
+
+
+def upload_video(
+    video_path: Path,
+    meta: VideoMeta,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    default_privacy: str = "private",
+    category_id: str = "10",
+    default_language: str = "en",
+    publish_at_iso: str = "",
+    channel_id: str = "",
+    content_owner_id: str = "",
+    *,
+    use_on_behalf_upload: bool = False,
+    primary_refresh_token: str | None = None,
+    fallback_to_primary_on_error: bool = False,
+) -> UploadResult:
+    primary = (primary_refresh_token or "").strip()
+    try:
+        return _upload_video_once(
+            video_path=video_path,
+            meta=meta,
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+            default_privacy=default_privacy,
+            category_id=category_id,
+            default_language=default_language,
+            publish_at_iso=publish_at_iso,
+            channel_id=channel_id,
+            content_owner_id=content_owner_id,
+            use_on_behalf_upload=use_on_behalf_upload,
+        )
+    except (HttpError, RefreshError) as exc:
+        if (
+            not fallback_to_primary_on_error
+            or not primary
+            or _upload_attempt_would_equal_primary_retry(
+                refresh_token=refresh_token,
+                primary_refresh_token=primary,
+                channel_id=channel_id,
+                content_owner_id=content_owner_id,
+                use_on_behalf_upload=use_on_behalf_upload,
+            )
+        ):
+            raise
+        logger.warning(
+            "youtube_upload: first upload failed (%s: %s); retrying with primary "
+            "YOUTUBE_REFRESH_TOKEN and default channel (no onBehalfOf*).",
+            type(exc).__name__,
+            exc,
+        )
+        return _upload_video_once(
+            video_path=video_path,
+            meta=meta,
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=primary,
+            default_privacy=default_privacy,
+            category_id=category_id,
+            default_language=default_language,
+            publish_at_iso=publish_at_iso,
+            channel_id="",
+            content_owner_id="",
+            use_on_behalf_upload=False,
+        )

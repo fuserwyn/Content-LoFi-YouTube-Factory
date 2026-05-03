@@ -289,6 +289,8 @@ def run(
                 channel_id=config.youtube_upload_channel_id,
                 content_owner_id=config.youtube_content_owner_id,
                 use_on_behalf_upload=config.youtube_use_on_behalf_upload,
+                primary_refresh_token=config.youtube_refresh_token,
+                fallback_to_primary_on_error=config.youtube_upload_fallback_to_primary,
             )
             youtube_video_id = upload_result.video_id
             report_payload["upload"] = {

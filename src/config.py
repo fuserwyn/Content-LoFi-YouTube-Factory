@@ -19,6 +19,7 @@ class AppConfig:
     youtube_upload_channel_id: str
     youtube_content_owner_id: str
     youtube_use_on_behalf_upload: bool
+    youtube_upload_fallback_to_primary: bool
     youtube_default_privacy: str
     youtube_category_id: str
     youtube_default_language: str
@@ -201,6 +202,7 @@ def load_config() -> AppConfig:
         ).strip(),
         youtube_content_owner_id=os.getenv("YOUTUBE_CONTENT_OWNER_ID", "").strip(),
         youtube_use_on_behalf_upload=_parse_bool("YOUTUBE_USE_ON_BEHALF_UPLOAD", False),
+        youtube_upload_fallback_to_primary=_parse_bool("YOUTUBE_UPLOAD_FALLBACK_TO_PRIMARY", True),
         youtube_default_privacy=os.getenv("YOUTUBE_DEFAULT_PRIVACY", "private"),
         youtube_category_id=os.getenv("YOUTUBE_CATEGORY_ID", "10"),
         youtube_default_language=os.getenv("YOUTUBE_DEFAULT_LANGUAGE", "en"),

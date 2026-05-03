@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from googleapiclient.errors import HttpError
 
 from src.generate_meta import VideoMeta
 from src.upload_youtube import UploadResult, upload_video
@@ -130,6 +131,83 @@ def test_upload_video_partner_params_skipped_when_on_behalf_disabled(
     call_kwargs = mocks["videos"].insert.call_args[1]
     assert "onBehalfOfContentOwnerChannel" not in call_kwargs
     assert "onBehalfOfContentOwner" not in call_kwargs
+
+
+def test_upload_video_retries_primary_token_when_alt_http_error(tmp_path: Path, mocker) -> None:
+    video_path = tmp_path / "test.mp4"
+    video_path.write_bytes(b"fake video")
+    meta = VideoMeta(title="T", description="D", tags=["t"])
+    mocks = _setup_youtube_mocks(mocker)
+    err = HttpError(resp=mocker.Mock(status=403), content=b"{}", uri="https://youtube.test/upload")
+    mocks["execute"].side_effect = [err, {"id": "video_from_primary"}]
+
+    result = upload_video(
+        video_path=video_path,
+        meta=meta,
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="refresh_alt",
+        primary_refresh_token="refresh_primary",
+        fallback_to_primary_on_error=True,
+    )
+    assert result.video_id == "video_from_primary"
+    assert mocks["credentials_class"].call_count == 2
+    assert mocks["credentials_class"].call_args_list[0][1]["refresh_token"] == "refresh_alt"
+    assert mocks["credentials_class"].call_args_list[1][1]["refresh_token"] == "refresh_primary"
+
+
+def test_upload_video_retries_without_on_behalf_when_partner_http_error(
+    tmp_path: Path, mocker
+) -> None:
+    video_path = tmp_path / "test.mp4"
+    video_path.write_bytes(b"fake video")
+    meta = VideoMeta(title="T", description="D", tags=["t"])
+    mocks = _setup_youtube_mocks(mocker)
+    err = HttpError(resp=mocker.Mock(status=400), content=b"{}", uri="https://youtube.test/upload")
+    mocks["execute"].side_effect = [err, {"id": "video_plain"}]
+
+    result = upload_video(
+        video_path=video_path,
+        meta=meta,
+        client_id="cid",
+        client_secret="csec",
+        refresh_token="same_refresh",
+        channel_id="UC_target",
+        content_owner_id="owner_z",
+        use_on_behalf_upload=True,
+        primary_refresh_token="same_refresh",
+        fallback_to_primary_on_error=True,
+    )
+    assert result.video_id == "video_plain"
+    assert mocks["execute"].call_count == 2
+    first_kw = mocks["videos"].insert.call_args_list[0][1]
+    assert first_kw["onBehalfOfContentOwnerChannel"] == "UC_target"
+    second_kw = mocks["videos"].insert.call_args_list[1][1]
+    assert "onBehalfOfContentOwnerChannel" not in second_kw
+    assert "onBehalfOfContentOwner" not in second_kw
+
+
+def test_upload_video_no_retry_when_primary_same_and_no_on_behalf(
+    tmp_path: Path, mocker
+) -> None:
+    video_path = tmp_path / "test.mp4"
+    video_path.write_bytes(b"fake video")
+    meta = VideoMeta(title="T", description="D", tags=["t"])
+    mocks = _setup_youtube_mocks(mocker)
+    err = HttpError(resp=mocker.Mock(status=403), content=b"{}", uri="https://youtube.test/upload")
+    mocks["execute"].side_effect = err
+
+    with pytest.raises(HttpError):
+        upload_video(
+            video_path=video_path,
+            meta=meta,
+            client_id="cid",
+            client_secret="csec",
+            refresh_token="same_rt",
+            primary_refresh_token="same_rt",
+            fallback_to_primary_on_error=True,
+        )
+    mocks["execute"].assert_called_once()
 
 
 def test_upload_video_channel_without_content_owner_skips_on_behalf(tmp_path: Path, mocker) -> None:
