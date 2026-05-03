@@ -111,7 +111,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/generate-poyo-shorts-only",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/generate-poyo-shorts-only",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

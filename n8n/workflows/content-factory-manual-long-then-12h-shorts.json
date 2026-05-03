@@ -1,6 +1,22 @@
 {
-  "name": "Content Factory - manual 1st long, then every 12h short or next long",
+  "name": "Content Factory — manual long + shorts (Railway hardcoded, 1min test)",
   "nodes": [
+    {
+      "parameters": {
+        "content": "## Content Factory ↔ Railway\n\n**Базовый URL (без `-x-` в имени)**\n`https://content-lofi-youtube-factory-production.up.railway.app`\n\n`content-lofi-`**x**`-youtube-…` → Railway **Application not found (404)**.\n\n**Эндпоинты в этом воркфлоу**\n- `GET /tracks`\n- `POST /workflow/render-main-and-shorts`\n- `POST /workflow/publish-short`\n\n**Авторизация**\n`X-Trigger-Key: 420` — должен совпадать с `TRIGGER_API_KEY` в Variables Railway.\n\n**HTTP таймауты**\n|tracks| 120s |render| 60m |publish-short| 10m |\n\n**Сейчас: тест автоматизации**\n- Cron: каждую минуту (`* * * * *`)\n- Commit-ноды: `STEP_MS = 60*1000` (1 мин)\n\n**Продакшен**\n- Cron: `0 * * * *` (раз в час)\n- В обоих Commit заменить: `STEP_MS = 12 * 60 * 60 * 1000`",
+        "height": 700,
+        "width": 440,
+        "color": 4
+      },
+      "id": "sticky-railway-readme",
+      "name": "README — URL, ключ 420, таймауты, тест/прод",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        120,
+        40
+      ]
+    },
     {
       "parameters": {
         "triggerTimes": {
@@ -64,7 +80,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/tracks",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/tracks",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -74,10 +90,13 @@
             }
           ]
         },
-        "options": {}
+        "options": {
+          "timeout": 120000
+        }
       },
       "id": "http-get-tracks",
       "name": "GET tracks",
+      "notes": "URL: …/tracks. Host = content-lofi-youtube-factory (без -x-). X-Trigger-Key 420 = TRIGGER_API_KEY на Railway. Timeout 120s.",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -135,7 +154,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/workflow/render-main-and-shorts",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/workflow/render-main-and-shorts",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -151,10 +170,14 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.renderBody) }}"
+        "jsonBody": "={{ JSON.stringify($json.renderBody) }}",
+        "options": {
+          "timeout": 3600000
+        }
       },
       "id": "http-render-main",
       "name": "POST render-main-and-shorts",
+      "notes": "Долгий рендер + загрузка main. Host без -x-. Timeout 60m; при обрыве увеличь в options или в Settings → n8n.",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -212,7 +235,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/workflow/publish-short",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/workflow/publish-short",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -228,10 +251,14 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.publishBody) }}"
+        "jsonBody": "={{ JSON.stringify($json.publishBody) }}",
+        "options": {
+          "timeout": 600000
+        }
       },
       "id": "http-publish-short",
       "name": "POST publish-short",
+      "notes": "Загрузка шорта на YouTube. Timeout 10m. Тот же базовый URL и X-Trigger-Key 420.",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
