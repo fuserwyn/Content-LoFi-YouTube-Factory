@@ -5,6 +5,8 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import os
+import socket
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -118,7 +120,14 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
     with _file_lock(data_dir):
         path = _queue_path(data_dir)
         if not path.is_file():
-            logger.debug("n8n short queue peek: no_queue_file")
+            logger.warning(
+                "WORKFLOW: n8n short publish peek no_queue_file | "
+                "Cron GET sees no queue on this instance. If a render just persisted the queue, "
+                "use one Railway replica or a volume for data/ (multi-replica = separate disks). "
+                "host=%s railway_replica=%s",
+                socket.gethostname(),
+                os.environ.get("RAILWAY_REPLICA_ID", ""),
+            )
             return _peek_envelope({"ready": False, "reason": "no_queue"})
         state = json.loads(path.read_text(encoding="utf-8"))
         shorts: list[dict[str, Any]] = list(state.get("shorts") or [])

@@ -92,6 +92,21 @@
     },
     {
       "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $input.first().json;\nconst nested = item.body;\nif (nested != null && typeof nested === 'object' && !Array.isArray(nested)) {\n  return [{ json: { ...item, ...nested } }];\n}\nif (typeof nested === 'string') {\n  try {\n    const parsed = JSON.parse(nested);\n    if (parsed && typeof parsed === 'object') {\n      return [{ json: { ...item, ...parsed } }];\n    }\n  } catch (e) {}\n}\nreturn [{ json: item }];"
+      },
+      "id": "normalize-n8n-peek-node",
+      "name": "Normalize peek JSON",
+      "notes": "HTTP Request иногда кладёт JSON в body; If смотрит publish_int на верхнем уровне.",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        790,
+        220
+      ]
+    },
+    {
+      "parameters": {
         "conditions": {
           "options": {
             "version": 2,
@@ -486,6 +501,17 @@
       ]
     },
     "GET n8n-short-publish-next": {
+      "main": [
+        [
+          {
+            "node": "Normalize peek JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize peek JSON": {
       "main": [
         [
           {
