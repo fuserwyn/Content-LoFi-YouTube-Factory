@@ -63,13 +63,13 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ ($env.CONTENT_FACTORY_BASE_URL || '').replace(/\\/+$/, '') + '/tracks' }}",
+        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/tracks",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "X-Trigger-Key",
-              "value": "={{$env.TRIGGER_API_KEY}}"
+              "value": "420"
             }
           ]
         },
@@ -134,13 +134,13 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CONTENT_FACTORY_WORKFLOW_RENDER_URL || (($env.CONTENT_FACTORY_BASE_URL || '').replace(/\\/+$/, '') + '/workflow/render-main-and-shorts') }}",
+        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/workflow/render-main-and-shorts",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "X-Trigger-Key",
-              "value": "={{$env.TRIGGER_API_KEY}}"
+              "value": "420"
             },
             {
               "name": "Content-Type",
@@ -211,13 +211,13 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.CONTENT_FACTORY_PUBLISH_SHORT_URL || (($env.CONTENT_FACTORY_BASE_URL || '').replace(/\\/+$/, '') + '/workflow/publish-short') }}",
+        "url": "https://content-lofi-x-youtube-factory-production.up.railway.app/workflow/publish-short",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "X-Trigger-Key",
-              "value": "={{$env.TRIGGER_API_KEY}}"
+              "value": "420"
             },
             {
               "name": "Content-Type",
