@@ -92,7 +92,7 @@ def persist_queue_after_render(data_dir: Path, workflow_result: dict[str, Any], 
         "WORKFLOW: n8n short publish queue persisted | shorts=%d gap_ms=%d (~%.2fh) "
         "next_publish_after_ms=%s | GET n8n-short-publish-next returns ready=false "
         "(before_deadline) until then. Cron frequency does not shorten this gap. "
-        "Тест 1 мин: N8N_SHORT_PUBLISH_GAP_MS=60000 на Railway.",
+        "Интервал задаётся N8N_SHORT_PUBLISH_GAP_MS (прод 43200000 = 12 ч; тест 60000).",
         len(shorts),
         gap,
         gap_h,
