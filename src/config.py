@@ -87,6 +87,7 @@ class AppConfig:
     minimax_video_resolution: str
     minimax_poll_interval_seconds: int
     minimax_max_wait_seconds: int
+    n8n_short_publish_gap_ms: int
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -290,5 +291,9 @@ def load_config() -> AppConfig:
         minimax_max_wait_seconds=max(
             60,
             int(os.getenv("MINIMAX_MAX_WAIT_SECONDS", "600").strip() or "600"),
+        ),
+        n8n_short_publish_gap_ms=max(
+            1_000,
+            int((os.getenv("N8N_SHORT_PUBLISH_GAP_MS") or str(12 * 60 * 60 * 1000)).strip()),
         ),
     )

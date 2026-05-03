@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Content Factory ↔ Railway\n\n**Базовый URL (без `-x-` в имени)**\n`https://content-lofi-youtube-factory-production.up.railway.app`\n\n`content-lofi-`**x**`-youtube-…` → Railway **Application not found (404)**.\n\n**Эндпоинты в этом воркфлоу**\n- `GET /tracks`\n- `POST /workflow/render-main-and-shorts`\n- `POST /workflow/publish-short`\n\n**Авторизация**\n`X-Trigger-Key: 420` — должен совпадать с `TRIGGER_API_KEY` в Variables Railway.\n\n**HTTP таймауты**\n|tracks| 120s |render| 60m |publish-short| 10m |\n\n**Сейчас: тест автоматизации**\n- Cron: каждую минуту (`* * * * *`)\n- Commit-ноды: `STEP_MS = 60*1000` (1 мин)\n\n**Продакшен**\n- Cron: `0 * * * *` (раз в час)\n- В обоих Commit заменить: `STEP_MS = 12 * 60 * 60 * 1000`",
+        "content": "## Content Factory ↔ Railway\n\n**Базовый URL (без `-x-` в имени)**\n`https://content-lofi-youtube-factory-production.up.railway.app`\n\n`content-lofi-`**x**`-youtube-…` → Railway **Application not found (404)**.\n\n**Эндпоинты в этом воркфлоу**\n- `GET /tracks`\n- `POST /workflow/render-main-and-shorts`\n- `POST /workflow/publish-short`\n\n**Авторизация**\n`X-Trigger-Key: 420` — должен совпадать с `TRIGGER_API_KEY` в Variables Railway.\n\n**HTTP таймауты**\n|tracks| 120s |render| 60m |publish-short| 10m |\n\n**Сейчас: тест автоматизации**\n- Cron: каждую минуту (`* * * * *`)\n- Commit-ноды: `STEP_MS = 60*1000` (1 мин)\n\n**Продакшен**\n- Cron: `0 * * * *` (раз в час)\n- В обоих Commit заменить: `STEP_MS = 12 * 60 * 60 * 1000`\n\n---\n**Очередь шортов (фикс n8n staticData)**\nПосле лонга фабрика пишет `data/n8n_short_publish_queue.json`.\nCron: `GET …/workflow/n8n-short-publish-next` → если `ready` → `POST publish-short` → `POST …/n8n-short-publish-ack`.\nИнтервал между шортами: **`N8N_SHORT_PUBLISH_GAP_MS`** на Railway (мс; тест 60000, прод 43200000).",
         "height": 700,
         "width": 440,
         "color": 4
@@ -65,6 +65,143 @@
     },
     {
       "parameters": {
+        "method": "GET",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/workflow/n8n-short-publish-next",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "420"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "http-n8n-short-next",
+      "name": "GET n8n-short-publish-next",
+      "notes": "Очередь шортов на сервере. ready=true → публикуем; иначе идём в GET tracks.",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if-ready-true",
+              "leftValue": "={{ $json.ready }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-n8n-short-ready",
+      "name": "If short job ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        900,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.ready }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.reason }}",
+              "rightValue": "before_deadline",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-before-short-deadline",
+      "name": "If waiting for short deadline only",
+      "notes": "ready=false + reason=before_deadline → не трогаем GET tracks (не стартуем следующий лонг).",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        900,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://content-lofi-youtube-factory-production.up.railway.app/workflow/n8n-short-publish-ack",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "420"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "http-n8n-short-ack",
+      "name": "POST n8n-short-publish-ack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        520
+      ]
+    },
+    {
+      "parameters": {
         "mode": "runOnceForAllItems",
         "jsCode": "const sd = $getWorkflowStaticData('global');\nsd.entrySource = 'manual';\nreturn [{ json: {} }];"
       },
@@ -107,7 +244,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Orchestration state: $getWorkflowStaticData('global')\n// pendingShorts: [{ path, index }], nextLongTrackIndex, mainMeta\n// Каждый лонг (индекс nextLongTrackIndex) — своя тема + свой набор хештегов из ROLL_PRESETS; плюс слова из имени файла трека (без дублей, до 15 тегов суммарно).\n// Если роликов больше чем пресетов — цикл по пресетам снова с начала.\n\nfunction skip(reason, extra) {\n  return [{ json: Object.assign({ kind: 'skip', reason }, extra || {}) }];\n}\nconst ROLL_PRESETS = [{\"theme\": \"Lake Sunrise · Quiet Canvas\", \"tags\": [\"lofi\", \"lake\", \"sunrise\", \"chillhop\", \"study beats\"]}, {\"theme\": \"Ocean Glass · Slow Tide\", \"tags\": [\"ocean\", \"waves\", \"ambient\", \"relax\", \"slow living\"]}, {\"theme\": \"Forest Mist · Deep Green\", \"tags\": [\"forest\", \"nature\", \"mist\", \"calm\", \"deep focus\"]}, {\"theme\": \"Rain Window · Study Hours\", \"tags\": [\"rain\", \"study music\", \"cozy\", \"ambient\", \"playlist\"]}, {\"theme\": \"City Night · Soft Neon\", \"tags\": [\"night city\", \"lofi\", \"urban chill\", \"beats\", \"late night\"]}, {\"theme\": \"Mountain Air · Wide Sky\", \"tags\": [\"mountains\", \"peaceful\", \"nature\", \"instrumental\", \"breathe\"]}, {\"theme\": \"River Stones · Steady Flow\", \"tags\": [\"river\", \"flow state\", \"focus\", \"gentle\", \"water sounds\"]}, {\"theme\": \"Desert Dawn · Warm Haze\", \"tags\": [\"desert aura\", \"warm\", \"slow\", \"meditation\", \"soft pads\"]}, {\"theme\": \"Cabin Wood · Fireplace Mind\", \"tags\": [\"cabin\", \"cozy lofi\", \"fireplace vibe\", \"winter calm\", \"slow\"]}, {\"theme\": \"Surf Faded · Golden Hour\", \"tags\": [\"surf\", \"golden hour\", \"chill\", \"summer vibe\", \"lofi hip hop\"]}, {\"theme\": \"Tokyo Alley · Lamp Glow\", \"tags\": [\"tokyo lofi\", \"night walk\", \"anime vibes\", \"chill beats\", \"rain mood\"]}, {\"theme\": \"Coffee Steam · 5 AM Desk\", \"tags\": [\"coffee shop\", \"morning lofi\", \"study grind\", \"soft jazz\", \"focus\"]}, {\"theme\": \"Train Window · Passing Fields\", \"tags\": [\"train journey\", \"travel lofi\", \"nostalgia\", \"calm\", \"instrumental\"]}, {\"theme\": \"Library Hush · Page Turn\", \"tags\": [\"library\", \"reading music\", \"quiet\", \"study\", \"minimal\"]}, {\"theme\": \"Garden Shade · Bees & Breeze\", \"tags\": [\"garden\", \"spring\", \"nature lofi\", \"peaceful\", \"daydream\"]}, {\"theme\": \"Harbor Rope · Seagull Slow\", \"tags\": [\"harbor\", \"seaside\", \"slow day\", \"ambient\", \"chillout\"]}, {\"theme\": \"Piano Dust · Sun Beam\", \"tags\": [\"piano lofi\", \"soft keys\", \"melancholy\", \"dreamy\", \"calm\"]}, {\"theme\": \"Synth Bloom · Pastel Sky\", \"tags\": [\"synth lofi\", \"retro chill\", \"pastel\", \"vapor calm\", \"beats\"]}, {\"theme\": \"Bamboo Path · Zen Step\", \"tags\": [\"zen\", \"bamboo\", \"meditation music\", \"spa calm\", \"asia vibe\"]}, {\"theme\": \"Snow Melt · Thin Light\", \"tags\": [\"winter ambient\", \"melting snow\", \"quiet\", \"slow life\", \"peace\"]}, {\"theme\": \"Market Morning · Soft Crowd\", \"tags\": [\"morning market\", \"life sounds\", \"gentle\", \"urban calm\", \"lofi\"]}, {\"theme\": \"Cliff Wind · Edge Silence\", \"tags\": [\"cliff\", \"wind sounds\", \"vast\", \"reflective\", \"nature\"]}, {\"theme\": \"Vintage Tape · Warm Room\", \"tags\": [\"tape lofi\", \"nostalgic\", \"warm room\", \"old school\", \"chill\"]}, {\"theme\": \"Lantern Festival · Paper Glow\", \"tags\": [\"festival night\", \"warm lights\", \"dreamy\", \"soft beats\", \"calm\"]}, {\"theme\": \"Tropical Haze · Palm Shade\", \"tags\": [\"tropical chill\", \"palm trees\", \"summer lofi\", \"relax\", \"island\"]}, {\"theme\": \"Meadow Bees · Long Afternoon\", \"tags\": [\"meadow\", \"afternoon nap\", \"nature\", \"slow\", \"peaceful\"]}, {\"theme\": \"Rooftop Wind · City Nap\", \"tags\": [\"rooftop\", \"city view\", \"nap music\", \"lofi\", \"skyline\"]}, {\"theme\": \"Subway Hum · Loop Thoughts\", \"tags\": [\"subway\", \"urban loop\", \"thinking beats\", \"night ride\", \"lofi\"]}, {\"theme\": \"Bookstore Cat · Muffled Rain\", \"tags\": [\"bookstore\", \"cozy rain\", \"soft pages\", \"quiet\", \"study\"]}, {\"theme\": \"Ferry Deck · Fog Horn Far\", \"tags\": [\"ferry\", \"fog\", \"slow travel\", \"sea mood\", \"ambient\"]}, {\"theme\": \"Greenhouse Glass · Dripping Leaf\", \"tags\": [\"greenhouse\", \"plants\", \"moist air\", \"calm focus\", \"nature\"]}, {\"theme\": \"Campfire Circle · Low Flame\", \"tags\": [\"campfire\", \"outdoor chill\", \"friends vibe\", \"guitar lofi\", \"night\"]}, {\"theme\": \"Abstract Blue · Shape Drift\", \"tags\": [\"abstract\", \"blue mood\", \"experimental chill\", \"soundscape\", \"relax\"]}, {\"theme\": \"Letter Ink · Folding Paper\", \"tags\": [\"letters\", \"nostalgia\", \"quiet desk\", \"slow piano\", \"emotion\"]}, {\"theme\": \"Bike Lane · Leaves Spin\", \"tags\": [\"bike ride\", \"autumn leaves\", \"easy day\", \"lofi\", \"motion\"]}, {\"theme\": \"Studio Lamp · Mix Quiet\", \"tags\": [\"studio\", \"producer chill\", \"late mix\", \"headphones\", \"focus\"]}, {\"theme\": \"Cloud Layer · Slow Drift\", \"tags\": [\"clouds\", \"drift\", \"sky lofi\", \"weightless\", \"calm\"]}, {\"theme\": \"Reef Shade · Slow Swim\", \"tags\": [\"underwater mood\", \"reef\", \"slow swim\", \"peaceful\", \"blue calm\"]}, {\"theme\": \"Clock Tick · 3 AM Thoughts\", \"tags\": [\"3am\", \"insomnia lofi\", \"late thoughts\", \"soft\", \"minimal\"]}, {\"theme\": \"Bridge Arch · River Under\", \"tags\": [\"bridge\", \"river under\", \"city calm\", \"walk music\", \"lofi\"]}, {\"theme\": \"Wildflower Hill · Bees Low\", \"tags\": [\"wildflowers\", \"hill walk\", \"spring calm\", \"nature\", \"soft\"]}, {\"theme\": \"Neon Rain · Puddle Walk\", \"tags\": [\"neon rain\", \"reflection\", \"cyber chill\", \"night walk\", \"lofi\"]}, {\"theme\": \"Sail Slack · Rope Creak\", \"tags\": [\"sailing\", \"rope creak\", \"slow ocean\", \"wind lofi\", \"peace\"]}, {\"theme\": \"Teahouse Steam · Wood Screen\", \"tags\": [\"teahouse\", \"steam\", \"wood tone\", \"asia calm\", \"slow tea\"]}, {\"theme\": \"Mirror Lake · No Ripple\", \"tags\": [\"mirror lake\", \"still water\", \"meditation\", \"silence\", \"nature\"]}, {\"theme\": \"Desert Road · Long Line\", \"tags\": [\"road trip\", \"desert road\", \"horizon\", \"travel lofi\", \"drive\"]}];\n\nfunction tagsFromTrackPath(trackRelPath) {\n  const base = String(trackRelPath || '').split('/').pop().replace(/\\.[^.]+$/, '');\n  const chunks = base.split(/[-–—_\\s]+/).map((s) => s.replace(/^\\d+\\s*/, '').trim().toLowerCase()).filter((s) => s.length > 2);\n  const out = [];\n  for (const c of chunks.slice(0, 5)) {\n    const t = c.replace(/[^a-z0-9\\u0400-\\u04FF-]/gi, '');\n    if (t.length > 1) out.push(t);\n  }\n  return out;\n}\n\nfunction mergeTags(presetTags, extra, maxLen) {\n  const seen = new Set();\n  const res = [];\n  for (const t of [...presetTags, ...extra]) {\n    const k = String(t).toLowerCase();\n    if (!k || seen.has(k)) continue;\n    seen.add(k);\n    res.push(t);\n    if (res.length >= maxLen) break;\n  }\n  return res;\n}\n\n\nconst sd = $getWorkflowStaticData('global');\nconst entry = sd.entrySource || 'cron';\n\nsd.pendingShorts = sd.pendingShorts || [];\nsd.nextLongTrackIndex = sd.nextLongTrackIndex ?? 0;\nsd.mainMeta = sd.mainMeta || { title: '', description: '', tags: [] };\n\n// 1) Очередь шортов — без обязательного успешного GET /tracks\nif (sd.pendingShorts.length > 0) {\n  const now = Date.now();\n  if (sd.nextShortPublishAtMs == null) {\n    sd.nextShortPublishAtMs = now;\n  }\n  if (now < sd.nextShortPublishAtMs) {\n    return skip('before_short_publish_deadline', {\n      now,\n      next_short_publish_at_ms: sd.nextShortPublishAtMs,\n      wait_ms: sd.nextShortPublishAtMs - now,\n      pending_shorts: sd.pendingShorts.length,\n    });\n  }\n  const head = sd.pendingShorts[0];\n  const meta = sd.mainMeta;\n  return [{\n    json: {\n      kind: 'publish',\n      publishBody: {\n        short_path: head.path,\n        main_title: meta.title || 'Short',\n        description: meta.description || '',\n        tags: Array.isArray(meta.tags) ? meta.tags : [],\n        short_index: typeof head.index === 'number' ? head.index : 0,\n        shorts_privacy_status: 'public',\n        cleanup_after: true\n      }\n    }\n  }];\n}\n\nconst data = $input.first().json || {};\nconst tracks = Array.isArray(data.tracks) ? data.tracks : [];\nif (!tracks.length) {\n  return skip('no_tracks_in_response', { hint: 'GET /tracks вернул пусто или не JSON' });\n}\n\nif (entry === 'manual') {\n  if (sd.nextLongTrackIndex !== 0) {\n    return skip('manual_ignored_campaign_already_started', { next_long_track_index: sd.nextLongTrackIndex });\n  }\n}\n\nif (sd.nextLongTrackIndex >= tracks.length) {\n  return skip('all_tracks_done', { next_long_track_index: sd.nextLongTrackIndex, tracks_total: tracks.length });\n}\n\nif (entry === 'cron' && sd.nextLongTrackIndex === 0) {\n  return skip('cron_waiting_manual_first_long', {\n    hint: 'Сначала Manual; если лонг уже был — нет очереди шортов в static data (не отработал Commit или сброс)',\n    pending_shorts: sd.pendingShorts.length,\n  });\n}\n\nif (entry === 'cron' && sd.nextLongRenderAtMs != null && Date.now() < sd.nextLongRenderAtMs) {\n  return skip('before_next_long_deadline', {\n    now: Date.now(),\n    next_long_render_at_ms: sd.nextLongRenderAtMs,\n    wait_ms: sd.nextLongRenderAtMs - Date.now(),\n  });\n}\n\nconst idx = sd.nextLongTrackIndex;\nconst track = tracks[idx];\nconst preset = ROLL_PRESETS[idx % ROLL_PRESETS.length];\nconst theme = preset.theme;\nconst tags = mergeTags(preset.tags, tagsFromTrackPath(track), 15);\n\nreturn [{\n  json: {\n    kind: 'render',\n    renderBody: {\n      track,\n      allow_recent_preferred: false,\n      tags,\n      theme,\n      publish_at_iso: new Date().toISOString(),\n      shorts_count: 3,\n      short_publish_offset_hours: [12, 24, 36],\n      shorts_use_main_track_thirds: true,\n      main_privacy_status: 'public',\n      shorts_privacy_status: 'public',\n      cleanup_source_after_publish: true,\n      cleanup_shorts_after_upload: true,\n      clip_seconds: 30\n    }\n  }\n}];\n"
+        "jsCode": "// Orchestration state: $getWorkflowStaticData('global')\n// pendingShorts: [{ path, index }], nextLongTrackIndex, mainMeta\n// Каждый лонг (индекс nextLongTrackIndex) — своя тема + свой набор хештегов из ROLL_PRESETS; плюс слова из имени файла трека (без дублей, до 15 тегов суммарно).\n// Если роликов больше чем пресетов — цикл по пресетам снова с начала.\n\nfunction skip(reason, extra) {\n  return [{ json: Object.assign({ kind: 'skip', reason }, extra || {}) }];\n}\nconst ROLL_PRESETS = [{\"theme\": \"Lake Sunrise · Quiet Canvas\", \"tags\": [\"lofi\", \"lake\", \"sunrise\", \"chillhop\", \"study beats\"]}, {\"theme\": \"Ocean Glass · Slow Tide\", \"tags\": [\"ocean\", \"waves\", \"ambient\", \"relax\", \"slow living\"]}, {\"theme\": \"Forest Mist · Deep Green\", \"tags\": [\"forest\", \"nature\", \"mist\", \"calm\", \"deep focus\"]}, {\"theme\": \"Rain Window · Study Hours\", \"tags\": [\"rain\", \"study music\", \"cozy\", \"ambient\", \"playlist\"]}, {\"theme\": \"City Night · Soft Neon\", \"tags\": [\"night city\", \"lofi\", \"urban chill\", \"beats\", \"late night\"]}, {\"theme\": \"Mountain Air · Wide Sky\", \"tags\": [\"mountains\", \"peaceful\", \"nature\", \"instrumental\", \"breathe\"]}, {\"theme\": \"River Stones · Steady Flow\", \"tags\": [\"river\", \"flow state\", \"focus\", \"gentle\", \"water sounds\"]}, {\"theme\": \"Desert Dawn · Warm Haze\", \"tags\": [\"desert aura\", \"warm\", \"slow\", \"meditation\", \"soft pads\"]}, {\"theme\": \"Cabin Wood · Fireplace Mind\", \"tags\": [\"cabin\", \"cozy lofi\", \"fireplace vibe\", \"winter calm\", \"slow\"]}, {\"theme\": \"Surf Faded · Golden Hour\", \"tags\": [\"surf\", \"golden hour\", \"chill\", \"summer vibe\", \"lofi hip hop\"]}, {\"theme\": \"Tokyo Alley · Lamp Glow\", \"tags\": [\"tokyo lofi\", \"night walk\", \"anime vibes\", \"chill beats\", \"rain mood\"]}, {\"theme\": \"Coffee Steam · 5 AM Desk\", \"tags\": [\"coffee shop\", \"morning lofi\", \"study grind\", \"soft jazz\", \"focus\"]}, {\"theme\": \"Train Window · Passing Fields\", \"tags\": [\"train journey\", \"travel lofi\", \"nostalgia\", \"calm\", \"instrumental\"]}, {\"theme\": \"Library Hush · Page Turn\", \"tags\": [\"library\", \"reading music\", \"quiet\", \"study\", \"minimal\"]}, {\"theme\": \"Garden Shade · Bees & Breeze\", \"tags\": [\"garden\", \"spring\", \"nature lofi\", \"peaceful\", \"daydream\"]}, {\"theme\": \"Harbor Rope · Seagull Slow\", \"tags\": [\"harbor\", \"seaside\", \"slow day\", \"ambient\", \"chillout\"]}, {\"theme\": \"Piano Dust · Sun Beam\", \"tags\": [\"piano lofi\", \"soft keys\", \"melancholy\", \"dreamy\", \"calm\"]}, {\"theme\": \"Synth Bloom · Pastel Sky\", \"tags\": [\"synth lofi\", \"retro chill\", \"pastel\", \"vapor calm\", \"beats\"]}, {\"theme\": \"Bamboo Path · Zen Step\", \"tags\": [\"zen\", \"bamboo\", \"meditation music\", \"spa calm\", \"asia vibe\"]}, {\"theme\": \"Snow Melt · Thin Light\", \"tags\": [\"winter ambient\", \"melting snow\", \"quiet\", \"slow life\", \"peace\"]}, {\"theme\": \"Market Morning · Soft Crowd\", \"tags\": [\"morning market\", \"life sounds\", \"gentle\", \"urban calm\", \"lofi\"]}, {\"theme\": \"Cliff Wind · Edge Silence\", \"tags\": [\"cliff\", \"wind sounds\", \"vast\", \"reflective\", \"nature\"]}, {\"theme\": \"Vintage Tape · Warm Room\", \"tags\": [\"tape lofi\", \"nostalgic\", \"warm room\", \"old school\", \"chill\"]}, {\"theme\": \"Lantern Festival · Paper Glow\", \"tags\": [\"festival night\", \"warm lights\", \"dreamy\", \"soft beats\", \"calm\"]}, {\"theme\": \"Tropical Haze · Palm Shade\", \"tags\": [\"tropical chill\", \"palm trees\", \"summer lofi\", \"relax\", \"island\"]}, {\"theme\": \"Meadow Bees · Long Afternoon\", \"tags\": [\"meadow\", \"afternoon nap\", \"nature\", \"slow\", \"peaceful\"]}, {\"theme\": \"Rooftop Wind · City Nap\", \"tags\": [\"rooftop\", \"city view\", \"nap music\", \"lofi\", \"skyline\"]}, {\"theme\": \"Subway Hum · Loop Thoughts\", \"tags\": [\"subway\", \"urban loop\", \"thinking beats\", \"night ride\", \"lofi\"]}, {\"theme\": \"Bookstore Cat · Muffled Rain\", \"tags\": [\"bookstore\", \"cozy rain\", \"soft pages\", \"quiet\", \"study\"]}, {\"theme\": \"Ferry Deck · Fog Horn Far\", \"tags\": [\"ferry\", \"fog\", \"slow travel\", \"sea mood\", \"ambient\"]}, {\"theme\": \"Greenhouse Glass · Dripping Leaf\", \"tags\": [\"greenhouse\", \"plants\", \"moist air\", \"calm focus\", \"nature\"]}, {\"theme\": \"Campfire Circle · Low Flame\", \"tags\": [\"campfire\", \"outdoor chill\", \"friends vibe\", \"guitar lofi\", \"night\"]}, {\"theme\": \"Abstract Blue · Shape Drift\", \"tags\": [\"abstract\", \"blue mood\", \"experimental chill\", \"soundscape\", \"relax\"]}, {\"theme\": \"Letter Ink · Folding Paper\", \"tags\": [\"letters\", \"nostalgia\", \"quiet desk\", \"slow piano\", \"emotion\"]}, {\"theme\": \"Bike Lane · Leaves Spin\", \"tags\": [\"bike ride\", \"autumn leaves\", \"easy day\", \"lofi\", \"motion\"]}, {\"theme\": \"Studio Lamp · Mix Quiet\", \"tags\": [\"studio\", \"producer chill\", \"late mix\", \"headphones\", \"focus\"]}, {\"theme\": \"Cloud Layer · Slow Drift\", \"tags\": [\"clouds\", \"drift\", \"sky lofi\", \"weightless\", \"calm\"]}, {\"theme\": \"Reef Shade · Slow Swim\", \"tags\": [\"underwater mood\", \"reef\", \"slow swim\", \"peaceful\", \"blue calm\"]}, {\"theme\": \"Clock Tick · 3 AM Thoughts\", \"tags\": [\"3am\", \"insomnia lofi\", \"late thoughts\", \"soft\", \"minimal\"]}, {\"theme\": \"Bridge Arch · River Under\", \"tags\": [\"bridge\", \"river under\", \"city calm\", \"walk music\", \"lofi\"]}, {\"theme\": \"Wildflower Hill · Bees Low\", \"tags\": [\"wildflowers\", \"hill walk\", \"spring calm\", \"nature\", \"soft\"]}, {\"theme\": \"Neon Rain · Puddle Walk\", \"tags\": [\"neon rain\", \"reflection\", \"cyber chill\", \"night walk\", \"lofi\"]}, {\"theme\": \"Sail Slack · Rope Creak\", \"tags\": [\"sailing\", \"rope creak\", \"slow ocean\", \"wind lofi\", \"peace\"]}, {\"theme\": \"Teahouse Steam · Wood Screen\", \"tags\": [\"teahouse\", \"steam\", \"wood tone\", \"asia calm\", \"slow tea\"]}, {\"theme\": \"Mirror Lake · No Ripple\", \"tags\": [\"mirror lake\", \"still water\", \"meditation\", \"silence\", \"nature\"]}, {\"theme\": \"Desert Road · Long Line\", \"tags\": [\"road trip\", \"desert road\", \"horizon\", \"travel lofi\", \"drive\"]}];\n\nfunction tagsFromTrackPath(trackRelPath) {\n  const base = String(trackRelPath || '').split('/').pop().replace(/\\.[^.]+$/, '');\n  const chunks = base.split(/[-–—_\\s]+/).map((s) => s.replace(/^\\d+\\s*/, '').trim().toLowerCase()).filter((s) => s.length > 2);\n  const out = [];\n  for (const c of chunks.slice(0, 5)) {\n    const t = c.replace(/[^a-z0-9\\u0400-\\u04FF-]/gi, '');\n    if (t.length > 1) out.push(t);\n  }\n  return out;\n}\n\nfunction mergeTags(presetTags, extra, maxLen) {\n  const seen = new Set();\n  const res = [];\n  for (const t of [...presetTags, ...extra]) {\n    const k = String(t).toLowerCase();\n    if (!k || seen.has(k)) continue;\n    seen.add(k);\n    res.push(t);\n    if (res.length >= maxLen) break;\n  }\n  return res;\n}\n\n\nconst sd = $getWorkflowStaticData('global');\nconst entry = sd.entrySource || 'cron';\n\nsd.pendingShorts = sd.pendingShorts || [];\nsd.nextLongTrackIndex = sd.nextLongTrackIndex ?? 0;\nsd.mainMeta = sd.mainMeta || { title: '', description: '', tags: [] };\n\nconst data = $input.first().json || {};\nconst tracks = Array.isArray(data.tracks) ? data.tracks : [];\nif (!tracks.length) {\n  return skip('no_tracks_in_response', { hint: 'GET /tracks вернул пусто или не JSON' });\n}\n\nif (entry === 'manual') {\n  if (sd.nextLongTrackIndex !== 0) {\n    return skip('manual_ignored_campaign_already_started', { next_long_track_index: sd.nextLongTrackIndex });\n  }\n}\n\nif (sd.nextLongTrackIndex >= tracks.length) {\n  return skip('all_tracks_done', { next_long_track_index: sd.nextLongTrackIndex, tracks_total: tracks.length });\n}\n\nif (entry === 'cron' && sd.nextLongTrackIndex === 0) {\n  return skip('cron_waiting_manual_first_long', {\n    hint: 'Сначала Manual; если лонг уже был — нет очереди шортов в static data (не отработал Commit или сброс)',\n    pending_shorts: sd.pendingShorts.length,\n  });\n}\n\nif (entry === 'cron' && sd.nextLongRenderAtMs != null && Date.now() < sd.nextLongRenderAtMs) {\n  return skip('before_next_long_deadline', {\n    now: Date.now(),\n    next_long_render_at_ms: sd.nextLongRenderAtMs,\n    wait_ms: sd.nextLongRenderAtMs - Date.now(),\n  });\n}\n\nconst idx = sd.nextLongTrackIndex;\nconst track = tracks[idx];\nconst preset = ROLL_PRESETS[idx % ROLL_PRESETS.length];\nconst theme = preset.theme;\nconst tags = mergeTags(preset.tags, tagsFromTrackPath(track), 15);\n\nreturn [{\n  json: {\n    kind: 'render',\n    renderBody: {\n      track,\n      allow_recent_preferred: false,\n      tags,\n      theme,\n      publish_at_iso: new Date().toISOString(),\n      shorts_count: 3,\n      short_publish_offset_hours: [12, 24, 36],\n      shorts_use_main_track_thirds: true,\n      main_privacy_status: 'public',\n      shorts_privacy_status: 'public',\n      cleanup_source_after_publish: true,\n      cleanup_shorts_after_upload: true,\n      clip_seconds: 30\n    }\n  }\n}];\n"
       },
       "id": "router-node",
       "name": "Route: render long vs publish short",
@@ -188,7 +325,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const STEP_MS = 60 * 1000; // TEMP test: 1 min between shorts / before next long. Prod: 12 * 60 * 60 * 1000\nconst body = $input.first().json;\nconst sd = $getWorkflowStaticData('global');\nconst w = body.workflow || {};\nconst files = w.shorts_files || [];\nsd.pendingShorts = files.map((f) => ({ path: f.path, index: f.index }));\nconst mm = w.main_meta || {};\nsd.mainMeta = {\n  title: mm.title || '',\n  description: mm.description || '',\n  tags: Array.isArray(mm.tags) ? mm.tags : []\n};\nsd.nextLongTrackIndex = (sd.nextLongTrackIndex ?? 0) + 1;\nsd.nextLongRenderAtMs = null;\nsd.nextShortPublishAtMs = Date.now() + STEP_MS;\nreturn [{ json: { committed: 'render', shortsQueued: sd.pendingShorts.length, nextLongTrackIndex: sd.nextLongTrackIndex, nextShortPublishAtMs: sd.nextShortPublishAtMs } }];"
+        "jsCode": "const raw = $input.first().json;\nconst body = raw && typeof raw.body === 'object' ? raw.body : raw;\nconst sd = $getWorkflowStaticData('global');\nsd.nextLongTrackIndex = (sd.nextLongTrackIndex ?? 0) + 1;\nsd.nextLongRenderAtMs = null;\nconst wr = body.workflow || body;\nconst sf = wr.shorts_files || [];\nreturn [{ json: { committed: 'render', shorts_on_server: sf.length, note: 'Очередь шортов на фабрике (n8n_short_publish_queue.json)' } }];"
       },
       "id": "commit-render-node",
       "name": "Commit after long render",
@@ -197,39 +334,6 @@
       "position": [
         1560,
         220
-      ]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "version": 2,
-            "leftValue": "",
-            "caseSensitive": true,
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "if-kind-publish",
-              "leftValue": "={{ $json.kind }}",
-              "rightValue": "publish",
-              "operator": {
-                "type": "string",
-                "operation": "equals",
-                "name": "filter.operator.equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        }
-      },
-      "id": "if-publish-node",
-      "name": "If kind is publish",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        1120,
-        520
       ]
     },
     {
@@ -269,7 +373,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const STEP_MS = 60 * 1000; // TEMP test: 1 min between shorts / before next long. Prod: 12 * 60 * 60 * 1000\nconst sd = $getWorkflowStaticData('global');\nif (sd.pendingShorts && sd.pendingShorts.length) {\n  sd.pendingShorts.shift();\n}\nif (sd.pendingShorts.length > 0) {\n  sd.nextShortPublishAtMs = Date.now() + STEP_MS;\n} else {\n  sd.nextShortPublishAtMs = null;\n  sd.nextLongRenderAtMs = Date.now() + STEP_MS;\n}\nreturn [{ json: { committed: 'publish', remainingShorts: sd.pendingShorts.length, nextLongRenderAtMs: sd.nextLongRenderAtMs } }];"
+        "jsCode": "const STEP_MS = 60 * 1000; // TEMP test; прод: 12 * 60 * 60 * 1000\nconst sd = $getWorkflowStaticData('global');\nconst ack = $input.first().json || {};\nif (ack.ok === true && ack.all_shorts_done === true) {\n  sd.nextLongRenderAtMs = Date.now() + STEP_MS;\n}\nreturn [{ json: ack }];"
       },
       "id": "commit-publish-node",
       "name": "Commit after short upload",
@@ -297,7 +401,7 @@
       "main": [
         [
           {
-            "node": "GET tracks",
+            "node": "GET n8n-short-publish-next",
             "type": "main",
             "index": 0
           }
@@ -346,13 +450,7 @@
             "index": 0
           }
         ],
-        [
-          {
-            "node": "If kind is publish",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        []
       ]
     },
     "POST render-main-and-shorts": {
@@ -366,23 +464,11 @@
         ]
       ]
     },
-    "If kind is publish": {
-      "main": [
-        [
-          {
-            "node": "POST publish-short",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        []
-      ]
-    },
     "POST publish-short": {
       "main": [
         [
           {
-            "node": "Commit after short upload",
+            "node": "POST n8n-short-publish-ack",
             "type": "main",
             "index": 0
           }
@@ -394,6 +480,58 @@
         [
           {
             "node": "Mark entry cron",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET n8n-short-publish-next": {
+      "main": [
+        [
+          {
+            "node": "If short job ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If short job ready": {
+      "main": [
+        [
+          {
+            "node": "POST publish-short",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If waiting for short deadline only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST n8n-short-publish-ack": {
+      "main": [
+        [
+          {
+            "node": "Commit after short upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If waiting for short deadline only": {
+      "main": [
+        [],
+        [
+          {
+            "node": "GET tracks",
             "type": "main",
             "index": 0
           }

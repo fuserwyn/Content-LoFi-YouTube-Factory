@@ -20,6 +20,7 @@ from .video_generation import generate_external_video
 from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import create_tiktok_cuts
 from .upload_youtube import upload_video
+from .n8n_short_queue import ack_publish, peek_next_job, persist_queue_after_render
 
 
 class RunRequest(BaseModel):
@@ -732,6 +733,22 @@ def start_trigger_server(config: AppConfig) -> None:
             "tracks": rel,
         }
 
+    @app.get("/workflow/n8n-short-publish-next")
+    def n8n_short_publish_next(x_trigger_key: str | None = Header(default=None)) -> dict:
+        """Next Short publish job for n8n (disk queue; does not use workflow staticData)."""
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return peek_next_job(config.data_dir, config.n8n_short_publish_gap_ms)
+
+    @app.post("/workflow/n8n-short-publish-ack")
+    def n8n_short_publish_ack(x_trigger_key: str | None = Header(default=None)) -> dict:
+        """Call after successful POST /workflow/publish-short for the current dequeue."""
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return ack_publish(config.data_dir, config.n8n_short_publish_gap_ms)
+
     @app.post("/run")
     def run_now(payload: RunRequest, x_trigger_key: str | None = Header(default=None)) -> dict:
         provided_key = x_trigger_key or ""
@@ -901,6 +918,12 @@ def start_trigger_server(config: AppConfig) -> None:
                 logger=logger,
                 bundle=bundle,
                 payload=payload,
+            )
+
+            persist_queue_after_render(
+                config.data_dir,
+                workflow_result,
+                config.n8n_short_publish_gap_ms,
             )
 
             track_path_str = str(bundle.selected_track)

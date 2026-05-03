@@ -85,6 +85,7 @@ def _minimal_config(**kwargs: str) -> AppConfig:
         minimax_video_resolution="768P",
         minimax_poll_interval_seconds=10,
         minimax_max_wait_seconds=600,
+        n8n_short_publish_gap_ms=43200000,
     )
     base.update(kwargs)
     return AppConfig(**base)  # type: ignore[arg-type]
