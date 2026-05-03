@@ -13,6 +13,17 @@ def _track_display_name(track_path: Path) -> str:
     return track_path.stem.replace("_", " ").strip()
 
 
+def _theme_public_label(theme: str | None) -> str | None:
+    """Strip subtitle after middle dot (e.g. 'Lake Sunrise · Quiet Canvas' -> 'Lake Sunrise')."""
+    if not theme or not theme.strip():
+        return None
+    t = theme.strip()
+    sep = "\u00b7"  # ·
+    if sep in t:
+        t = t.split(sep, 1)[0].strip()
+    return t or None
+
+
 def _visuals_slug(tags_seed: list[str], theme: str | None) -> str:
     parts: list[str] = []
     if theme and theme.strip():
@@ -80,17 +91,18 @@ def _youtube_tags(tags_seed: list[str], theme: str | None) -> list[str]:
 
 def generate_metadata(track_path: Path, tags_seed: list[str], theme: str | None = None) -> VideoMeta:
     track_name = _track_display_name(track_path)
-    headline = theme.strip() if theme and theme.strip() else "Lo-Fi"
+    label = _theme_public_label(theme)
+    headline = label if label else "Lo-Fi"
 
     title = f"{headline} | {track_name}"[:100]
 
-    visuals = _visuals_slug(tags_seed, theme)
+    visuals = _visuals_slug(tags_seed, label)
     description = (
         f"Track: {track_name}\n"
         f"Visuals: Licensed stock footage ({visuals}).\n\n"
         f"{_hashtag_line(tags_seed)}"
     )[:5000]
 
-    tags = _youtube_tags(tags_seed, theme)
+    tags = _youtube_tags(tags_seed, label)
 
     return VideoMeta(title=title, description=description, tags=tags)

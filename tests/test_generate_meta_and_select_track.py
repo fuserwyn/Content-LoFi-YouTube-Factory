@@ -25,6 +25,14 @@ def test_generate_metadata_uses_theme_in_title() -> None:
     assert "Ocean Sunset" in meta.title
 
 
+def test_generate_metadata_strips_subtitle_after_middle_dot() -> None:
+    track = Path("assets/tracks/night_wave_01.mp3")
+    meta = generate_metadata(track, ["ocean"], theme="Lake Sunrise \u00b7 Quiet Canvas")
+
+    assert "Lake Sunrise" in meta.title
+    assert "Quiet Canvas" not in meta.title
+
+
 def test_choose_track_prefers_non_recent(tmp_path: Path) -> None:
     first = tmp_path / "a.mp3"
     second = tmp_path / "b.mp3"
