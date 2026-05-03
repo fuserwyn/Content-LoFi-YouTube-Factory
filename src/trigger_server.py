@@ -249,6 +249,7 @@ def publish_main_and_shorts_impl(
         ),
         channel_id=config.youtube_upload_channel_id,
         content_owner_id=config.youtube_content_owner_id,
+        use_on_behalf_upload=config.youtube_use_on_behalf_upload,
     )
 
     offsets_raw = payload.short_publish_offset_hours
@@ -308,6 +309,7 @@ def publish_main_and_shorts_impl(
             ),
             channel_id=config.youtube_upload_channel_id,
             content_owner_id=config.youtube_content_owner_id,
+            use_on_behalf_upload=config.youtube_use_on_behalf_upload,
         )
         short_uploads.append(
             {
@@ -407,6 +409,7 @@ def workflow_render_main_and_cut_shorts_impl(
         ),
         channel_id=config.youtube_upload_channel_id,
         content_owner_id=config.youtube_content_owner_id,
+        use_on_behalf_upload=config.youtube_use_on_behalf_upload,
     )
     fixed_track_audio: Path | None = None
     slice_track_parts = False
