@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -525,6 +526,51 @@ def workflow_publish_short_impl(
         "video_id": upload_result.video_id,
         "youtube_short_url": f"https://www.youtube.com/shorts/{upload_result.video_id}",
     }
+
+
+def _prepare_shorts_only_vertical_single_clip(poyo_payload: dict) -> dict:
+    """One PoYo generation job, vertical 9:16 hints for common video models (shorts pipeline)."""
+    out = copy.deepcopy(poyo_payload)
+    inp = out.get("input")
+    if not isinstance(inp, dict):
+        inp = {}
+    top_prompt = out.get("prompt")
+    if isinstance(top_prompt, str) and top_prompt.strip() and not str(inp.get("prompt", "")).strip():
+        inp["prompt"] = top_prompt.strip()
+    out["input"] = inp
+    model = str(out.get("model", "")).strip().lower()
+    vert = (
+        "vertical 9:16 portrait video for Shorts, smartphone upright, "
+        "tall frame, NOT landscape, NOT 16:9 widescreen"
+    )
+    prompt = str(inp.get("prompt", "")).strip()
+
+    if model == "hailuo-2.3":
+        inp["aspect_ratio"] = "9:16"
+        res = str(inp.get("resolution", "768p")).strip().lower()
+        dur_raw = inp.get("duration", 10)
+        try:
+            dur = int(dur_raw)
+        except (TypeError, ValueError):
+            dur = 10
+        if dur not in (6, 10):
+            dur = 10 if dur > 6 else 6
+        if res == "1080p" and dur == 10:
+            dur = 6
+        inp["duration"] = dur
+        inp["resolution"] = res
+        if vert.lower()[:20] not in prompt.lower():
+            inp["prompt"] = f"{prompt}, {vert}".strip(", ") if prompt else vert
+    elif "seedance" in model:
+        inp.setdefault("aspect_ratio", "9:16")
+        if vert.lower()[:20] not in prompt.lower():
+            inp["prompt"] = f"{prompt}, {vert}".strip(", ") if prompt else vert
+    else:
+        inp.setdefault("aspect_ratio", "9:16")
+        if prompt and vert.lower()[:20] not in prompt.lower():
+            inp["prompt"] = f"{prompt}, {vert}"
+
+    return out
 
 
 def start_trigger_server(config: AppConfig) -> None:
@@ -1082,11 +1128,21 @@ def start_trigger_server(config: AppConfig) -> None:
             output_name = (payload.output_filename or f"poyo_shorts_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.mp4").strip()
             output_path = (config.data_dir / "poyo_generated" / output_name).resolve()
 
+            if payload.poyo_stitch_segments != 1:
+                logger.info(
+                    "TRIGGER: generate-poyo-shorts-only ignores poyo_stitch_segments=%s (using 1)",
+                    payload.poyo_stitch_segments,
+                )
+            gen_payload = (
+                _prepare_shorts_only_vertical_single_clip(payload.poyo_payload)
+                if config.video_generation_provider == "poyo"
+                else payload.poyo_payload
+            )
             generation_result = generate_external_video(
                 config=config,
-                poyo_payload=payload.poyo_payload,
+                poyo_payload=gen_payload,
                 output_path=output_path,
-                segment_count=payload.poyo_stitch_segments,
+                segment_count=1,
             )
             generated_output_path = Path(str(generation_result.get("output_path", output_path)))
             shorts_result = _publish_shorts_only(

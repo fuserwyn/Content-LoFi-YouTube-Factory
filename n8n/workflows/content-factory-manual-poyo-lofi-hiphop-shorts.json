@@ -16,7 +16,7 @@
             {
               "id": "prompt-visual",
               "name": "prompt_visual",
-              "value": "Cozy late-night city for lo-fi hip hop: soft teal and purple neon, rainy window reflections, bedroom studio corner with sampler and vinyl, slow horizontal drift, tape warmth, chillhop mood, cinematic vertical composition",
+              "value": "Cozy late-night city for lo-fi hip hop: soft teal and purple neon, rainy window reflections, bedroom studio corner with sampler and vinyl, gentle slow tilt and vertical drift, tape warmth, chillhop mood, vertical portrait framing",
               "type": "string"
             },
             {
@@ -70,7 +70,7 @@
             {
               "id": "poyo-stitch",
               "name": "poyo_stitch_segments",
-              "value": "2",
+              "value": "1",
               "type": "string"
             },
             {
@@ -94,19 +94,19 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [460, 320],
-      "notes": "PoYo Hailuo 2.3: video_model=hailuo-2.3, hailuo_duration 6|10, hailuo_resolution 768p|1080p (1080p только с duration 6). Подсказка: Code не видит $env — правьте поля здесь."
+      "notes": "poyo_stitch_segments: 1 = одно видео (10 с при hailuo_duration=10). Значение 2+ = несколько генераций PoYo + склейка на фабрике. Остальное: см. Code node."
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const j = $input.first().json;\n// PoYo Hailuo 2.3 — https://docs.poyo.ai (POST /api/generate/submit)\nconst model = String(j.video_model || 'hailuo-2.3').trim() || 'hailuo-2.3';\nlet resolution = String(j.hailuo_resolution || '768p').trim().toLowerCase();\nif (!['768p', '1080p'].includes(resolution)) resolution = '768p';\n\nlet duration = parseInt(String(j.hailuo_duration || '10'), 10);\nif (![6, 10].includes(duration)) duration = duration <= 8 ? 6 : 10;\n// 1080p only supports duration=6 (PoYo docs)\nif (resolution === '1080p' && duration === 10) duration = 6;\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = 'lo-fi hip hop music video aesthetic, chillhop, soft neon palette, cozy mood, slow smooth camera, subtle 35mm grain, no people faces focus, no readable text, no logos, no watermark, vertical cinematic 9:16';\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\nconst poyoStitchSegments = Math.min(4, Math.max(1, parseInt(String(j.poyo_stitch_segments || '1'), 10) || 1));\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-hailuo-lofi-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nconst input = {\n  prompt,\n  duration,\n  resolution,\n  prompt_optimizer: j.hailuo_prompt_optimizer !== false && j.hailuo_prompt_optimizer !== 'false',\n};\nconst startUrl = String(j.hailuo_start_image_url || '').trim();\nif (startUrl) input.start_image_url = startUrl;\n\nreturn [{\n  json: {\n    poyo_payload: { model, input },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n    poyo_stitch_segments: poyoStitchSegments,\n  },\n}];\n"
+        "jsCode": "const j = $input.first().json;\n// PoYo Hailuo 2.3 — https://docs.poyo.ai (POST /api/generate/submit)\n// poyo_stitch_segments 2+ = несколько задач + склейка; 1 = один клип.\nconst model = String(j.video_model || 'hailuo-2.3').trim() || 'hailuo-2.3';\nlet resolution = String(j.hailuo_resolution || '768p').trim().toLowerCase();\nif (!['768p', '1080p'].includes(resolution)) resolution = '768p';\n\nlet duration = parseInt(String(j.hailuo_duration || '10'), 10);\nif (![6, 10].includes(duration)) duration = duration <= 8 ? 6 : 10;\nif (resolution === '1080p' && duration === 10) duration = 6;\n\nconst userPrompt = String(j.prompt_visual || '').trim();\nconst styleFix = [\n  'vertical 9:16 portrait video for YouTube Shorts and TikTok',\n  'full-frame tall narrow composition, phone held upright, portrait orientation',\n  'NOT landscape, NOT 16:9 widescreen, NOT horizontal framing',\n  'lo-fi hip hop music video, chillhop, soft neon palette, cozy mood',\n  'gentle camera motion suited to vertical frame, subtle 35mm grain',\n  'no readable text, no logos, no watermark, no faces as main subject',\n].join(', ');\nconst prompt = [userPrompt, styleFix].filter(Boolean).join(', ');\n\nconst tags = String(j.tags || '')\n  .split(',')\n  .map((t) => t.trim())\n  .filter(Boolean);\n\nconst shortsCount = Math.max(1, parseInt(String(j.shorts_count || '1'), 10) || 1);\nconst clipSeconds = Math.max(5, parseInt(String(j.clip_seconds || '30'), 10) || 30);\nconst poyoStitchSegments = Math.min(4, Math.max(1, parseInt(String(j.poyo_stitch_segments || '1'), 10) || 1));\n\nconst rawName = String(j.output_filename || '').trim();\nconst outputFilename = rawName || `poyo-hailuo-lofi-${Date.now()}.mp4`;\n\nconst trackMeta = String(j.track_for_metadata || '').trim() || null;\nconst theme = String(j.theme || 'Lo-fi Hip Hop').trim();\nconst privacy = String(j.shorts_privacy_status || 'public').trim() || 'public';\n\nconst aspect = String(j.hailuo_aspect_ratio || '9:16').trim() || '9:16';\nconst input = {\n  prompt,\n  duration,\n  resolution,\n  aspect_ratio: aspect,\n  prompt_optimizer: j.hailuo_prompt_optimizer !== false && j.hailuo_prompt_optimizer !== 'false',\n};\nconst startUrl = String(j.hailuo_start_image_url || '').trim();\nif (startUrl) input.start_image_url = startUrl;\n\nreturn [{\n  json: {\n    poyo_payload: { model, input },\n    output_filename: outputFilename,\n    track_for_metadata: trackMeta,\n    theme,\n    tags,\n    publish_at_iso: new Date().toISOString(),\n    shorts_count: shortsCount,\n    short_delay_hours: 0,\n    short_interval_hours: 24,\n    clip_seconds: clipSeconds,\n    shorts_privacy_status: privacy,\n    cleanup_source_after_publish: true,\n    cleanup_shorts_after_upload: true,\n    poyo_stitch_segments: poyoStitchSegments,\n  },\n}];\n"
       },
       "id": "lofi-build-poyo-payload",
       "name": "Build Poyo LoFi Shorts Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [700, 320],
-      "notes": "PoYo hailuo-2.3 payload. Optional: Set hailuo_start_image_url (URL). hailuo_prompt_optimizer=false to disable."
+      "notes": "PoYo hailuo-2.3. В input добавлен aspect_ratio 9:16 (если шлюз PoYo передаёт в модель). Вертикаль усиливается промптом. Опции: hailuo_start_image_url, hailuo_aspect_ratio, hailuo_prompt_optimizer=false."
     },
     {
       "parameters": {
