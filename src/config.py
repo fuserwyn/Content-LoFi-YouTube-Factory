@@ -239,7 +239,7 @@ def load_config() -> AppConfig:
         trigger_api_key=os.getenv("TRIGGER_API_KEY", "").strip(),
         no_repeat_clips_in_single_video=_parse_bool("NO_REPEAT_CLIPS_IN_SINGLE_VIDEO", False),
         allow_shorter_unique_video=_parse_bool("ALLOW_SHORTER_UNIQUE_VIDEO", True),
-        match_video_duration_to_track=_parse_bool("MATCH_VIDEO_DURATION_TO_TRACK", False),
+        match_video_duration_to_track=_parse_bool("MATCH_VIDEO_DURATION_TO_TRACK", True),
         tiktok_cuts_enabled=_parse_bool("TIKTOK_CUTS_ENABLED", False),
         tiktok_clips_per_run=max(1, int(os.getenv("TIKTOK_CLIPS_PER_RUN", "3"))),
         tiktok_clip_seconds=max(5, int(os.getenv("TIKTOK_CLIP_SECONDS", "30"))),

@@ -4,9 +4,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from google.auth.exceptions import RefreshError
-from googleapiclient.errors import HttpError
-
 from .generate_meta import VideoMeta
 
 logger = logging.getLogger(__name__)
@@ -128,6 +125,9 @@ def upload_video(
     primary_refresh_token: str | None = None,
     fallback_to_primary_on_error: bool = False,
 ) -> UploadResult:
+    from google.auth.exceptions import RefreshError
+    from googleapiclient.errors import HttpError
+
     primary = (primary_refresh_token or "").strip()
     try:
         return _upload_video_once(

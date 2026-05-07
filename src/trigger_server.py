@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -878,6 +879,7 @@ def start_trigger_server(config: AppConfig) -> None:
                     keep_final_output=config.keep_final_output,
                 )
             store.close()
+            gc.collect()
             run_lock.release()
 
     @app.post("/workflow/render-main-and-shorts")
@@ -979,6 +981,7 @@ def start_trigger_server(config: AppConfig) -> None:
                     keep_final_output=config.keep_final_output,
                 )
             store.close()
+            gc.collect()
             run_lock.release()
 
     @app.post("/workflow/publish-short")

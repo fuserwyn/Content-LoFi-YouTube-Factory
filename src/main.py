@@ -42,7 +42,7 @@ def _cleanup_temp_files(temp_clips_dir: Path, temp_renders_dir: Path, keep_final
             shutil.rmtree(path, ignore_errors=True)
 
 
-def _probe_audio_duration_seconds(audio_path: Path) -> int | None:
+def _probe_audio_duration_seconds(audio_path: Path) -> float | None:
     cmd = [
         "ffprobe",
         "-v",
@@ -63,7 +63,8 @@ def _probe_audio_duration_seconds(audio_path: Path) -> int | None:
     if not raw:
         return None
     try:
-        return max(1, int(float(raw)))
+        duration = float(raw)
+        return max(0.1, duration)
     except ValueError:
         return None
 
@@ -141,7 +142,7 @@ def render_pexels_track_bundle(
         preferred_track=preferred_track,
         allow_recent_preferred=allow_recent_preferred,
     )
-    target_duration_seconds = config.target_duration_min * 60
+    target_duration_seconds = float(config.target_duration_min * 60)
     if config.match_video_duration_to_track:
         track_duration = _probe_audio_duration_seconds(selected_track)
         if track_duration is not None:

@@ -12,7 +12,7 @@ class _Proc:
 def test_probe_audio_duration_seconds_parses_value(mocker) -> None:
     mocker.patch("src.main.subprocess.run", return_value=_Proc(0, "183.7\n"))
     value = _probe_audio_duration_seconds(Path("/tmp/fake.mp3"))
-    assert value == 183
+    assert value == 183.7
 
 
 def test_probe_audio_duration_seconds_returns_none_on_error(mocker) -> None:
