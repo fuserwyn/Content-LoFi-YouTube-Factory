@@ -16,6 +16,8 @@ class AppConfig:
     youtube_client_secret: str
     youtube_refresh_token: str
     youtube_refresh_token_alt: str
+    youtube_oauth_public_base_url: str
+    youtube_oauth_token_path: str
     youtube_upload_channel_id: str
     youtube_content_owner_id: str
     youtube_use_on_behalf_upload: bool
@@ -103,22 +105,38 @@ def _parse_bool(name: str, default: bool = False) -> bool:
 
 
 def resolve_youtube_refresh_token(config: AppConfig, profile: str | None) -> str:
-    """Pick refresh token for multi-channel uploads in one process.
+    """Pick refresh token: persisted store (volume) first, then env fallback.
 
-    * default / omitted / primary → ``YOUTUBE_REFRESH_TOKEN``
-    * alt / secondary / 2 / … → ``YOUTUBE_REFRESH_TOKEN_ALT``
+    * default / omitted / primary → store or ``YOUTUBE_REFRESH_TOKEN``
+    * alt / secondary / 2 / … → store or ``YOUTUBE_REFRESH_TOKEN_ALT``
     """
+    from .youtube_oauth_store import get_stored_refresh_token
+
     raw = profile.strip() if isinstance(profile, str) else ""
     key = (raw or "default").strip().lower()
+    path_override = config.youtube_oauth_token_path
     if key in _DEFAULT_YOUTUBE_OAUTH_PROFILES:
-        return config.youtube_refresh_token.strip()
+        stored = get_stored_refresh_token(config.data_dir, "default", path_override=path_override)
+        if stored:
+            return stored
+        env_token = config.youtube_refresh_token.strip()
+        if env_token:
+            return env_token
+        raise ValueError(
+            "No YouTube refresh token for default profile. "
+            "Open GET /youtube/oauth/start?profile=default (with X-Trigger-Key) or set YOUTUBE_REFRESH_TOKEN."
+        )
     if key in _ALT_YOUTUBE_OAUTH_PROFILES:
+        stored = get_stored_refresh_token(config.data_dir, "alt", path_override=path_override)
+        if stored:
+            return stored
         alt = (config.youtube_refresh_token_alt or "").strip()
-        if not alt:
-            raise ValueError(
-                "youtube_oauth_profile is 'alt' but YOUTUBE_REFRESH_TOKEN_ALT is empty"
-            )
-        return alt
+        if alt:
+            return alt
+        raise ValueError(
+            "No YouTube refresh token for alt profile. "
+            "Open GET /youtube/oauth/start?profile=alt or set YOUTUBE_REFRESH_TOKEN_ALT."
+        )
     raise ValueError(
         f"Invalid youtube_oauth_profile {profile!r}; use 'default' or 'alt' (or omit for default)"
     )
@@ -194,8 +212,10 @@ def load_config() -> AppConfig:
         pexels_api_key=os.getenv("PEXELS_API_KEY", "").strip(),
         youtube_client_id=_require_env("YOUTUBE_CLIENT_ID"),
         youtube_client_secret=_require_env("YOUTUBE_CLIENT_SECRET"),
-        youtube_refresh_token=_require_env("YOUTUBE_REFRESH_TOKEN"),
+        youtube_refresh_token=os.getenv("YOUTUBE_REFRESH_TOKEN", "").strip(),
         youtube_refresh_token_alt=os.getenv("YOUTUBE_REFRESH_TOKEN_ALT", "").strip(),
+        youtube_oauth_public_base_url=os.getenv("YOUTUBE_OAUTH_PUBLIC_BASE_URL", "").strip(),
+        youtube_oauth_token_path=os.getenv("YOUTUBE_OAUTH_TOKEN_PATH", "").strip(),
         youtube_upload_channel_id=_env_with_fallback(
             "YOUTUBE_UPLOAD_CHANNEL_ID",
             "YOUTUBE_CHANNEL_ID",
@@ -249,9 +269,11 @@ def load_config() -> AppConfig:
         telegram_send_tiktok=_parse_bool("TELEGRAM_SEND_TIKTOK", False),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-        telegram_api_id=int(os.getenv("TELEGRAM_API_ID", "0").strip() or "0"),
-        telegram_api_hash=os.getenv("TELEGRAM_API_HASH", "").strip(),
-        telegram_session_string=os.getenv("TELEGRAM_SESSION_STRING", "").strip(),
+        telegram_api_id=int(
+            _env_with_fallback("TELEGRAM_API_ID", "API_ID", "0") or "0"
+        ),
+        telegram_api_hash=_env_with_fallback("TELEGRAM_API_HASH", "API_HASH", ""),
+        telegram_session_string=_env_with_fallback("TELEGRAM_SESSION_STRING", "SESSION_STRING", ""),
         poyo_api_key=_env_with_fallback("POYO_SEEDANCE_API_KEY", "POYO_API_KEY", ""),
         poyo_api_base_url=_env_with_fallback("POYO_SEEDANCE_API_BASE_URL", "POYO_API_BASE_URL", "https://api.poyo.ai"),
         poyo_generate_path=_env_with_fallback("POYO_SEEDANCE_GENERATE_PATH", "POYO_GENERATE_PATH", "/api/generate/submit"),

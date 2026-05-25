@@ -21,6 +21,14 @@ Run (from factory root):
   pip install google-auth-oauthlib python-dotenv
   python scripts/youtube_get_refresh_token.py
 
+**Recommended on Railway (no manual env paste):** set ``YOUTUBE_OAUTH_PUBLIC_BASE_URL``,
+add redirect URI ``https://<your-domain>/youtube/oauth/callback`` in Google Cloud (Web client),
+then open (with ``X-Trigger-Key`` if set):
+
+  https://<your-domain>/youtube/oauth/start?profile=default
+
+Token is saved to ``data/youtube_oauth_tokens.json`` — mount persistent volume on ``/app/data``.
+
 Log in in the browser as the Google account that should own uploads
 (second channel → that account). Copy the printed line into your .env as
 ``YOUTUBE_REFRESH_TOKEN`` for the default channel, or ``YOUTUBE_REFRESH_TOKEN_ALT``

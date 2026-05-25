@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 import gc
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -16,12 +18,14 @@ from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
 from .main import PexelsRenderBundle, _cleanup_temp_files, render_pexels_track_bundle, run as pipeline_run
 from .state_store import RunRecord, create_state_store
-from .notify_telegram import send_message_to_telegram
+from .notify_telegram import send_files_to_telegram, send_message_to_telegram
 from .video_generation import generate_external_video
 from .select_track import SUPPORTED_EXTENSIONS
-from .tiktok_cuts import create_tiktok_cuts
+from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 from .upload_youtube import upload_video
 from .n8n_short_queue import ack_publish, peek_next_job, persist_queue_after_render
+from .youtube_oauth_store import oauth_status, save_refresh_token, token_store_path
+from .youtube_oauth_web import PendingOAuth, complete_authorization, start_authorization
 
 
 class RunRequest(BaseModel):
@@ -713,6 +717,98 @@ def start_trigger_server(config: AppConfig) -> None:
     def health() -> dict:
         return {"status": "ok", "mode": "webhook"}
 
+    pending_youtube_oauth: dict[str, PendingOAuth] = {}
+    oauth_pending_ttl_seconds = 900
+
+    def _purge_pending_oauth() -> None:
+        now = time.time()
+        expired = [
+            state
+            for state, item in pending_youtube_oauth.items()
+            if now - item.created_at > oauth_pending_ttl_seconds
+        ]
+        for state in expired:
+            pending_youtube_oauth.pop(state, None)
+
+    def _oauth_redirect_uri() -> str:
+        base = config.youtube_oauth_public_base_url.strip().rstrip("/")
+        if not base:
+            raise HTTPException(
+                status_code=500,
+                detail="Set YOUTUBE_OAUTH_PUBLIC_BASE_URL to your public service URL (e.g. https://your-app.up.railway.app)",
+            )
+        return f"{base}/youtube/oauth/callback"
+
+    @app.get("/youtube/oauth/status")
+    def youtube_oauth_status(x_trigger_key: str | None = Header(default=None)) -> dict:
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        status = oauth_status(config.data_dir, path_override=config.youtube_oauth_token_path)
+        status["env_fallback"] = {
+            "default": bool(config.youtube_refresh_token.strip()),
+            "alt": bool(config.youtube_refresh_token_alt.strip()),
+        }
+        return status
+
+    @app.get("/youtube/oauth/start")
+    def youtube_oauth_start(
+        profile: str = "default",
+        x_trigger_key: str | None = Header(default=None),
+    ):
+        provided_key = x_trigger_key or ""
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+        _purge_pending_oauth()
+        redirect_uri = _oauth_redirect_uri()
+        try:
+            auth_url, state, pending = start_authorization(
+                client_id=config.youtube_client_id,
+                client_secret=config.youtube_client_secret,
+                redirect_uri=redirect_uri,
+                profile=profile,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("youtube oauth start failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        pending_youtube_oauth[state] = pending
+        logger.info("YOUTUBE_OAUTH: started profile=%s redirect_uri=%s", profile, redirect_uri)
+        return RedirectResponse(auth_url, status_code=302)
+
+    @app.get("/youtube/oauth/callback")
+    def youtube_oauth_callback(request: Request):
+        _purge_pending_oauth()
+        state = request.query_params.get("state", "")
+        if not state or state not in pending_youtube_oauth:
+            raise HTTPException(status_code=400, detail="invalid or expired oauth state")
+
+        pending = pending_youtube_oauth.pop(state)
+        try:
+            refresh_token = complete_authorization(pending, str(request.url))
+            store_path = token_store_path(config.data_dir, config.youtube_oauth_token_path)
+            save_refresh_token(store_path, pending.profile, refresh_token)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("youtube oauth callback failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        logger.info(
+            "YOUTUBE_OAUTH: saved refresh token profile=%s path=%s",
+            pending.profile,
+            store_path,
+        )
+        html = f"""
+        <html><body style="font-family:sans-serif;padding:2rem">
+          <h2>YouTube OAuth OK</h2>
+          <p>Profile <b>{pending.profile}</b> refresh token saved to <code>{store_path}</code>.</p>
+          <p>Uploads will use this token automatically (no Railway variable update needed).</p>
+          <p><b>Tip:</b> mount persistent volume on <code>/app/data</code> so token survives redeploy.</p>
+          <p>If token still expires every ~7 days, publish OAuth app to <b>Production</b> in Google Cloud.</p>
+        </body></html>
+        """
+        return HTMLResponse(html)
+
     @app.get("/tracks")
     def list_tracks(x_trigger_key: str | None = Header(default=None)) -> dict:
         """Sorted list of audio files under the resolved tracks dir (same discovery as video rendering)."""
@@ -1033,6 +1129,40 @@ def start_trigger_server(config: AppConfig) -> None:
                 tracks_dir,
                 output_dir,
             )
+            logger.info(
+                "TRIGGER: telegram_send_tiktok=%s chat_id_set=%s bot_token_set=%s mtproto=%s",
+                config.telegram_send_tiktok,
+                bool(config.telegram_chat_id),
+                bool(config.telegram_bot_token),
+                bool(
+                    config.telegram_api_id
+                    and config.telegram_api_hash
+                    and config.telegram_session_string
+                ),
+            )
+
+            telegram_errors: list[str] = []
+            telegram_sent_count = 0
+
+            def _on_clip_ready(item: TikTokClipResult) -> None:
+                nonlocal telegram_sent_count
+                if not config.telegram_send_tiktok:
+                    return
+                try:
+                    send_files_to_telegram(
+                        bot_token=config.telegram_bot_token,
+                        chat_id=config.telegram_chat_id,
+                        file_paths=[item.output_path],
+                        caption_prefix="TikTok cut ready",
+                        telegram_api_id=config.telegram_api_id,
+                        telegram_api_hash=config.telegram_api_hash,
+                        telegram_session_string=config.telegram_session_string,
+                    )
+                    telegram_sent_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("TRIGGER: telegram send failed for %s: %s", item.output_path, exc)
+                    telegram_errors.append(str(exc))
+
             results = create_tiktok_cuts(
                 source_video_path=source_video_path,
                 tracks_dir=tracks_dir,
@@ -1046,6 +1176,7 @@ def start_trigger_server(config: AppConfig) -> None:
                 crf=config.render_crf,
                 clip_min_seconds=max(5, clip_min_seconds) if clip_min_seconds is not None else None,
                 clip_max_seconds=max(5, clip_max_seconds) if clip_max_seconds is not None else None,
+                on_clip_ready=_on_clip_ready,
             )
             response_payload = {
                 "status": "ok",
@@ -1062,8 +1193,10 @@ def start_trigger_server(config: AppConfig) -> None:
                 ],
             }
             if config.telegram_send_tiktok:
-                # File uploads to Telegram for raw cuts are disabled; use publish-with-shorts for links.
-                response_payload["telegram_sent"] = False
+                response_payload["telegram_sent"] = telegram_sent_count > 0
+                response_payload["telegram_sent_count"] = telegram_sent_count
+                if telegram_errors:
+                    response_payload["telegram_errors"] = telegram_errors
             return response_payload
         except Exception as exc:  # noqa: BLE001
             logger.exception("TRIGGER: tiktok cuts failed: %s", exc)

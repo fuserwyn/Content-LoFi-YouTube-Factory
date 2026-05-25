@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.config import AppConfig, resolve_youtube_refresh_token
+from src.youtube_oauth_store import get_stored_refresh_token, save_refresh_token, token_store_path
 
 
 def _minimal_config(**kwargs: str) -> AppConfig:
@@ -86,6 +87,8 @@ def _minimal_config(**kwargs: str) -> AppConfig:
         minimax_poll_interval_seconds=10,
         minimax_max_wait_seconds=600,
         n8n_short_publish_gap_ms=43200000,
+        youtube_oauth_public_base_url="",
+        youtube_oauth_token_path="",
     )
     base.update(kwargs)
     return AppConfig(**base)  # type: ignore[arg-type]
@@ -100,7 +103,7 @@ def test_resolve_default_and_none() -> None:
 
 def test_resolve_alt_requires_env() -> None:
     cfg = _minimal_config()
-    with pytest.raises(ValueError, match="YOUTUBE_REFRESH_TOKEN_ALT"):
+    with pytest.raises(ValueError, match="alt profile"):
         resolve_youtube_refresh_token(cfg, "alt")
 
 
@@ -108,3 +111,26 @@ def test_resolve_alt_ok() -> None:
     cfg = _minimal_config(youtube_refresh_token_alt=" alt_rt ")
     assert resolve_youtube_refresh_token(cfg, "2") == "alt_rt"
     assert resolve_youtube_refresh_token(cfg, "secondary") == "alt_rt"
+
+
+def test_store_takes_priority_over_env(tmp_path: Path) -> None:
+    store = tmp_path / "tokens.json"
+    save_refresh_token(store, "default", "stored_refresh_token")
+    cfg = _minimal_config(
+        data_dir=tmp_path,
+        youtube_refresh_token="env_token",
+        youtube_oauth_token_path=str(store),
+    )
+    assert resolve_youtube_refresh_token(cfg, None) == "stored_refresh_token"
+
+
+def test_missing_both_raises(tmp_path: Path) -> None:
+    cfg = _minimal_config(data_dir=tmp_path, youtube_refresh_token="")
+    with pytest.raises(ValueError, match="No YouTube refresh token"):
+        resolve_youtube_refresh_token(cfg, None)
+
+
+def test_get_stored_refresh_token_alt(tmp_path: Path) -> None:
+    path = token_store_path(tmp_path)
+    save_refresh_token(path, "alt", "alt_rt")
+    assert get_stored_refresh_token(tmp_path, "alt") == "alt_rt"
