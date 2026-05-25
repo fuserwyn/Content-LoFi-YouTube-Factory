@@ -731,14 +731,27 @@ def start_trigger_server(config: AppConfig) -> None:
         for state in expired:
             pending_youtube_oauth.pop(state, None)
 
-    def _oauth_redirect_uri() -> str:
+    def _oauth_public_base_url() -> str:
         base = config.youtube_oauth_public_base_url.strip().rstrip("/")
         if not base:
             raise HTTPException(
                 status_code=500,
                 detail="Set YOUTUBE_OAUTH_PUBLIC_BASE_URL to your public service URL (e.g. https://your-app.up.railway.app)",
             )
-        return f"{base}/youtube/oauth/callback"
+        if base.startswith("http://"):
+            base = "https://" + base[len("http://") :]
+        return base
+
+    def _oauth_redirect_uri() -> str:
+        return f"{_oauth_public_base_url()}/youtube/oauth/callback"
+
+    def _external_request_url(request: Request) -> str:
+        """Railway terminates TLS at the edge; the app often sees http:// internally."""
+        url = str(request.url)
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+        if forwarded_proto == "https" and url.startswith("http://"):
+            url = "https://" + url[len("http://") :]
+        return url
 
     @app.get("/youtube/oauth/status")
     def youtube_oauth_status(
@@ -845,7 +858,9 @@ def start_trigger_server(config: AppConfig) -> None:
 
         pending = pending_youtube_oauth.pop(state)
         try:
-            refresh_token = complete_authorization(pending, str(request.url))
+            authorization_response = _external_request_url(request)
+            logger.info("YOUTUBE_OAUTH: callback url=%s", authorization_response)
+            refresh_token = complete_authorization(pending, authorization_response)
             store_path = token_store_path(config.data_dir, config.youtube_oauth_token_path)
             save_refresh_token(store_path, pending.profile, refresh_token)
         except Exception as exc:  # noqa: BLE001
