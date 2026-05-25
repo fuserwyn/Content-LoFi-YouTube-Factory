@@ -1,0 +1,58 @@
+{
+  "name": "Content Factory - YouTube OAuth Daily Probe",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "custom",
+              "cronExpression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily-probe",
+      "name": "Daily 06:00 UTC",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.CONTENT_FACTORY_BASE_URL}}/youtube/oauth/probe?notify_telegram=true",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Trigger-Key",
+              "value": "={{$env.TRIGGER_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "http-probe",
+      "name": "Probe YouTube Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Daily 06:00 UTC": {
+      "main": [
+        [
+          {
+            "node": "Probe YouTube Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}

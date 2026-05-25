@@ -6,33 +6,15 @@ Uses the same scope as upload: youtube.upload.
 
 Prerequisites:
   - Google Cloud: YouTube Data API v3 enabled.
-  - OAuth client: **Desktop app** (easiest), or **Web application** with an extra
-    redirect URI (see below).
-  - Put YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in .env (factory root)
-    or export them in the shell.
-
-If you use **Web application** OAuth client, open Google Cloud → Credentials →
-your client → *Authorized redirect URIs* and add **exactly** (including slash):
-  http://localhost:8080/
-If port 8080 is busy, set YOUTUBE_OAUTH_LOCAL_PORT=8090 and add that URI instead
-(e.g. http://localhost:8090/).
+  - OAuth client: **Desktop app** (easiest), or **Web application** with redirect URI
+    ``http://localhost:8080/`` (see below).
+  - Put YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in .env (factory root).
 
 Run (from factory root):
   pip install google-auth-oauthlib python-dotenv
-  python scripts/youtube_get_refresh_token.py
+  python3 scripts/youtube_get_refresh_token.py
 
-**Recommended on Railway (no manual env paste):** set ``YOUTUBE_OAUTH_PUBLIC_BASE_URL``,
-add redirect URI ``https://<your-domain>/youtube/oauth/callback`` in Google Cloud (Web client),
-then open (with ``X-Trigger-Key`` if set):
-
-  https://<your-domain>/youtube/oauth/start?profile=default
-
-Token is saved to ``data/youtube_oauth_tokens.json`` — mount persistent volume on ``/app/data``.
-
-Log in in the browser as the Google account that should own uploads
-(second channel → that account). Copy the printed line into your .env as
-``YOUTUBE_REFRESH_TOKEN`` for the default channel, or ``YOUTUBE_REFRESH_TOKEN_ALT``
-if this token is for the alternate channel (use ``youtube_oauth_profile`` / ``alt`` in API calls).
+Optional: YOUTUBE_OAUTH_CLIENT_TYPE=desktop if your Google client is Desktop app (default: web).
 """
 from __future__ import annotations
 
@@ -45,29 +27,70 @@ from dotenv import load_dotenv
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
-def main() -> None:
-    factory_root = Path(__file__).resolve().parent.parent
-    load_dotenv(factory_root / ".env")
-    load_dotenv()
+def _explain_missing_code(redirect_uri: str) -> None:
+    print(
+        "\nGoogle redirect did not include ?code= (MissingCodeError).\n"
+        "Common fixes:\n"
+        "  1. Complete login in the browser — do not close the tab early.\n"
+        "  2. Check the address bar after redirect — if you see error=access_denied, "
+        "allow access or add your Google account under Audience → Test users (Testing only).\n"
+        "  3. In Google Cloud → Clients → your OAuth client, Authorized redirect URIs "
+        f"must include exactly:\n     {redirect_uri}\n"
+        "  4. For local script, create a **Desktop app** OAuth client and set "
+        "YOUTUBE_OAUTH_CLIENT_TYPE=desktop in .env.\n"
+        "  5. Revoke old access: https://myaccount.google.com/permissions → run script again.\n",
+        file=sys.stderr,
+    )
 
-    client_id = os.environ.get("YOUTUBE_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "").strip()
-    if not client_id or not client_secret:
-        print(
-            "Missing YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET. "
-            "Set them in .env or the environment.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+
+def _run_web_flow(client_id: str, client_secret: str, port: int):
+    # InstalledAppFlow provides run_local_server; plain Flow does not.
+    from google_auth_oauthlib.flow import InstalledAppFlow
 
     try:
-        from google_auth_oauthlib.flow import InstalledAppFlow
+        from oauthlib.oauth2.rfc6749.errors import MissingCodeError
     except ImportError:
-        print(
-            "Install: pip install google-auth-oauthlib",
-            file=sys.stderr,
+        MissingCodeError = Exception  # type: ignore[misc, assignment]
+
+    redirect_uri = f"http://localhost:{port}/"
+    client_config = {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }
+    }
+    flow = InstalledAppFlow.from_client_config(client_config, scopes=SCOPES)
+    flow.redirect_uri = redirect_uri
+    flow.oauth2session.redirect_uri = redirect_uri
+    print(f"OAuth redirect (add in Google Cloud if missing): {redirect_uri}", file=sys.stderr)
+    print("Opening browser for Google login…", file=sys.stderr, flush=True)
+    try:
+        return flow.run_local_server(
+            port=port,
+            access_type="offline",
+            prompt="consent",
+            open_browser=True,
+            authorization_prompt_message=(
+                "Browser should open. Log in and allow access. "
+                "If nothing opens, check the terminal for a URL or use Railway /youtube/oauth/start."
+            ),
+            success_message="Authorization complete. Return to the terminal.",
         )
-        sys.exit(1)
+    except MissingCodeError:
+        _explain_missing_code(redirect_uri)
+        raise
+
+
+def _run_desktop_flow(client_id: str, client_secret: str, port: int):
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    try:
+        from oauthlib.oauth2.rfc6749.errors import MissingCodeError
+    except ImportError:
+        MissingCodeError = Exception  # type: ignore[misc, assignment]
 
     client_config = {
         "installed": {
@@ -75,61 +98,87 @@ def main() -> None:
             "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost"],
+            "redirect_uris": ["http://localhost", "urn:ietf:wg:oauth:2.0:oob"],
         }
     }
-
+    redirect_uri = f"http://localhost:{port}/"
     flow = InstalledAppFlow.from_client_config(client_config, scopes=SCOPES)
+    flow.redirect_uri = redirect_uri
+    flow.oauth2session.redirect_uri = redirect_uri
+    print(f"OAuth redirect (Desktop client): {redirect_uri}", file=sys.stderr)
+    try:
+        return flow.run_local_server(
+            port=port,
+            access_type="offline",
+            prompt="consent",
+            open_browser=True,
+        )
+    except MissingCodeError:
+        _explain_missing_code(redirect_uri)
+        raise
+
+
+def main() -> None:
+    factory_root = Path(__file__).resolve().parent.parent
+    load_dotenv(factory_root / ".env")
+    load_dotenv()
+
+    client_id = os.environ.get("YOUTUBE_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "").strip()
+    client_type = os.environ.get("YOUTUBE_OAUTH_CLIENT_TYPE", "web").strip().lower()
+    if not client_id or not client_secret:
+        print(
+            "Missing YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        import google_auth_oauthlib  # noqa: F401
+    except ImportError:
+        print("Install: pip install google-auth-oauthlib", file=sys.stderr)
+        sys.exit(1)
 
     env_port = os.environ.get("YOUTUBE_OAUTH_LOCAL_PORT", "").strip()
-    ports = (
-        [int(env_port)]
-        if env_port.isdigit()
-        else [8080, 8090, 8765, 9000]
-    )
+    ports = [int(env_port)] if env_port.isdigit() else [8080, 8090, 8765, 9000]
 
     creds = None
     last_oserr: OSError | None = None
+    last_exc: Exception | None = None
+    run_flow = _run_desktop_flow if client_type == "desktop" else _run_web_flow
+
     for port in ports:
         try:
-            print(
-                f"OAuth redirect (must match Google Cloud if Web client): "
-                f"http://localhost:{port}/",
-                file=sys.stderr,
-            )
-            # Fixed port so redirect_uri matches Google Cloud (not random port=0).
-            creds = flow.run_local_server(
-                port=port,
-                access_type="offline",
-                prompt="consent",
-                open_browser=True,
-            )
+            creds = run_flow(client_id, client_secret, port)
             break
         except OSError as exc:
-            # macOS: [Errno 48] Address already in use
             last_oserr = exc
-            if getattr(exc, "errno", None) in (48, 98, 10048):  # EADDRINUSE
+            if getattr(exc, "errno", None) in (48, 98, 10048):
                 continue
             raise
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            break
 
     if creds is None:
+        if last_exc is not None:
+            raise last_exc
         print(
             f"Could not bind a local port (tried {ports}): {last_oserr}\n"
-            "Free one of these ports or set YOUTUBE_OAUTH_LOCAL_PORT.",
+            "Set YOUTUBE_OAUTH_LOCAL_PORT or free a port.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     if not creds.refresh_token:
         print(
-            "No refresh_token in response. Revoke app access at "
-            "https://myaccount.google.com/permissions and run again, "
-            "or create a new **Desktop** OAuth client.",
+            "No refresh_token returned. Revoke app at https://myaccount.google.com/permissions "
+            "and run again (prompt=consent).",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    print("\nAdd or replace in your .env:\n")
+    print("\nAdd or replace in Railway / .env:\n")
     print(f"YOUTUBE_REFRESH_TOKEN={creds.refresh_token}\n")
 
 

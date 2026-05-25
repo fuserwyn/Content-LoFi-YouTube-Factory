@@ -6,6 +6,7 @@ This folder contains ready-to-import workflows for triggering Content Factory:
 - `workflows/content-factory-scheduled-run.json` - scheduled daily trigger (20:00 Kyiv / 17:00 UTC)
 - `workflows/content-factory-30-day-plan.json` - 30-day daily plan (track + tags + theme)
 - `workflows/content-factory-tiktok-cuts-manual.json` - manual TikTok cuts from an existing source video
+- `workflows/content-factory-youtube-oauth-daily-probe.json` - daily YouTube refresh token health check (+ optional Telegram alert)
 - `workflows/content-factory-30-day-main-plus-shorts.json` - separate daily workflow: 1 main video + 3 shorts from the same source
 - `workflows/content-factory-22-tracks-every-3-days-main-plus-shorts.json` - separate workflow for 22 tracks: 1 main every 3 days + 1 short per day (3 shorts total)
 - `workflows/content-factory-poyo-generate-and-publish.json` - generate one video with Poyo API and publish it with shorts
@@ -20,6 +21,7 @@ Set these in the n8n service:
 - `CONTENT_FACTORY_PUBLISH_WITH_SHORTS_URL=https://<content-factory-domain>/publish-video-with-shorts`
 - `CONTENT_FACTORY_POYO_GENERATE_AND_PUBLISH_URL=https://<content-factory-domain>/generate-poyo-and-publish`
 - `CONTENT_FACTORY_POYO_SHORTS_ONLY_URL=https://<content-factory-domain>/generate-poyo-shorts-only`
+- `CONTENT_FACTORY_BASE_URL=https://<content-factory-domain>` (daily YouTube OAuth probe)
 - `TRIGGER_API_KEY=<same value as Content Factory TRIGGER_API_KEY>`
 
 ## Import via n8n UI

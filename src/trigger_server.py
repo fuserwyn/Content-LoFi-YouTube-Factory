@@ -24,6 +24,7 @@ from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 from .upload_youtube import upload_video
 from .n8n_short_queue import ack_publish, peek_next_job, persist_queue_after_render
+from .youtube_oauth_health import probe_all_profiles, probe_config_profile
 from .youtube_oauth_store import oauth_status, save_refresh_token, token_store_path
 from .youtube_oauth_web import PendingOAuth, complete_authorization, start_authorization
 
@@ -740,8 +741,11 @@ def start_trigger_server(config: AppConfig) -> None:
         return f"{base}/youtube/oauth/callback"
 
     @app.get("/youtube/oauth/status")
-    def youtube_oauth_status(x_trigger_key: str | None = Header(default=None)) -> dict:
-        provided_key = x_trigger_key or ""
+    def youtube_oauth_status(
+        x_trigger_key: str | None = Header(default=None),
+        key: str | None = None,
+    ) -> dict:
+        provided_key = (x_trigger_key or key or "").strip()
         if config.trigger_api_key and provided_key != config.trigger_api_key:
             raise HTTPException(status_code=401, detail="unauthorized")
         status = oauth_status(config.data_dir, path_override=config.youtube_oauth_token_path)
@@ -751,12 +755,67 @@ def start_trigger_server(config: AppConfig) -> None:
         }
         return status
 
+    @app.get("/youtube/oauth/probe")
+    def youtube_oauth_probe(
+        profile: str | None = None,
+        x_trigger_key: str | None = Header(default=None),
+        key: str | None = None,
+        notify_telegram: bool = False,
+    ) -> dict:
+        """Validate refresh token by requesting a new access token (safe daily health check)."""
+        provided_key = (x_trigger_key or key or "").strip()
+        if config.trigger_api_key and provided_key != config.trigger_api_key:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+        if profile:
+            item = probe_config_profile(config, profile)
+            payload = {
+                "ok": item.ok,
+                "profiles": [
+                    {
+                        "profile": item.profile,
+                        "ok": item.ok,
+                        "message": item.message,
+                        "token_source": item.token_source,
+                    }
+                ],
+            }
+        else:
+            payload = probe_all_profiles(config)
+
+        if notify_telegram and config.telegram_bot_token and config.telegram_chat_id:
+            if payload.get("ok"):
+                send_message_to_telegram(
+                    config.telegram_bot_token,
+                    config.telegram_chat_id,
+                    "YouTube OAuth probe: OK (refresh token is valid).",
+                )
+            else:
+                lines = ["YouTube OAuth probe: FAILED — re-auth required."]
+                for entry in payload.get("profiles", []):
+                    if not entry.get("ok"):
+                        lines.append(f"- {entry.get('profile')}: {entry.get('message')}")
+                send_message_to_telegram(
+                    config.telegram_bot_token,
+                    config.telegram_chat_id,
+                    "\n".join(lines),
+                )
+            payload["telegram_notified"] = True
+
+        if not payload.get("ok"):
+            logger.warning("YOUTUBE_OAUTH_PROBE: failed %s", payload)
+        else:
+            logger.info("YOUTUBE_OAUTH_PROBE: ok %s", payload)
+        return payload
+
     @app.get("/youtube/oauth/start")
     def youtube_oauth_start(
         profile: str = "default",
         x_trigger_key: str | None = Header(default=None),
+        key: str | None = None,
     ):
-        provided_key = x_trigger_key or ""
+        # Header for API/n8n; ?key= for one-off browser OAuth (keep URL private).
+        provided_key = (x_trigger_key or key or "").strip()
         if config.trigger_api_key and provided_key != config.trigger_api_key:
             raise HTTPException(status_code=401, detail="unauthorized")
 
