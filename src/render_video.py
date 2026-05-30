@@ -8,6 +8,7 @@ import re
 import subprocess
 
 from .fetch_assets import ClipAsset
+from .ffmpeg_utils import finalize_ffmpeg_command
 
 LOGGER = logging.getLogger("content_factory")
 FFMPEG_TIME_RE = re.compile(r"time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
@@ -112,6 +113,10 @@ def render_video_with_ffmpeg(
         for segment_file in normalized_files:
             file.write(f"file '{segment_file.as_posix()}'\n")
 
+    # Segments above are already normalized to width×height@fps with identical
+    # libx264/yuv420p params, so concat by stream-copy instead of a second full
+    # re-encode of the whole video (the scale/crop/-r here would be no-ops). This
+    # removes an entire encode pass — the single longest phase of the render.
     _run_ffmpeg(
         [
             "ffmpeg",
@@ -122,10 +127,8 @@ def render_video_with_ffmpeg(
             "0",
             "-i",
             str(concat_list_path),
-            "-vf",
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-            "-r",
-            str(fps),
+            "-c",
+            "copy",
             "-an",
             str(stitched_video_path),
         ]
@@ -202,6 +205,7 @@ def _run_ffmpeg(
     progress_label: str = "",
     expected_duration_seconds: int = 0,
 ) -> None:
+    command = finalize_ffmpeg_command(command)
     proc = subprocess.Popen(
         command,
         stdout=subprocess.DEVNULL,

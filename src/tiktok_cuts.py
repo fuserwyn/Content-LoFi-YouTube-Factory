@@ -7,6 +7,7 @@ import random
 import subprocess
 from typing import Callable
 
+from .ffmpeg_utils import finalize_ffmpeg_command
 from .select_track import SUPPORTED_EXTENSIONS
 
 
@@ -277,6 +278,7 @@ def _render_one_clip(
         "-shortest",
         str(output_path),
     ]
+    cmd = finalize_ffmpeg_command(cmd)
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg TikTok render failed: {' '.join(cmd)}\n{proc.stderr}")

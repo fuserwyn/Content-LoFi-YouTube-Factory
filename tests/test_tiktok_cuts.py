@@ -312,7 +312,9 @@ def test_render_one_clip_builds_correct_command(tmp_path: Path, mocker) -> None:
     )
 
     cmd = mock_run.call_args[0][0]
-    assert cmd[0] == "ffmpeg"
+    assert "ffmpeg" in cmd  # may be prefixed with `nice` for CPU yielding
+    assert "-threads" in cmd  # encoder thread cap injected before output
+    assert cmd[-1] == str(output)
     assert "-ss" in cmd
     assert "10" in cmd
     assert "-t" in cmd
