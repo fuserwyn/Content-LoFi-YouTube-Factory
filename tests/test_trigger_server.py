@@ -22,6 +22,8 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         youtube_default_privacy="private",
         youtube_category_id="10",
         youtube_default_language="en",
+        youtube_oauth_public_base_url="",
+        youtube_oauth_token_path="",
         target_duration_min=3,
         target_width=1920,
         target_height=1080,
