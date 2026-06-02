@@ -5,6 +5,7 @@ from pathlib import Path
 import logging
 import random
 import re
+import shutil
 import subprocess
 
 from .fetch_assets import ClipAsset
@@ -134,6 +135,11 @@ def render_video_with_ffmpeg(
         ]
     )
 
+    # Segments are now baked into stitched.mp4 and never read again. Drop them
+    # immediately so their (potentially GB-scale) page cache is reclaimable
+    # during the long final encode instead of lingering until end-of-pipeline.
+    shutil.rmtree(normalized_dir, ignore_errors=True)
+
     final_target_seconds = target_duration_seconds
     final_cmd = ["ffmpeg", "-y"]
     # Loop stitched montage to fill audio when either (a) repeat mode, or (b) strict no-repeat
@@ -189,6 +195,10 @@ def render_video_with_ffmpeg(
         progress_label="final render",
         expected_duration_seconds=final_target_seconds,
     )
+
+    # final.mp4 is produced; the stitched intermediate is dead weight from here
+    # on (upload/tiktok-cuts work off final.mp4). Free its page cache now.
+    stitched_video_path.unlink(missing_ok=True)
 
     return RenderResult(
         output_path=output_path,

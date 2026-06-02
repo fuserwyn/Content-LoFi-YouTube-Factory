@@ -345,9 +345,19 @@ def test_render_video_with_ffmpeg_creates_normalized_clips(tmp_path: Path, mocke
         fps=30,
     )
 
-    # Verify normalized clips directory was created
+    # Verify each clip was normalized into its own segment_*.mp4 via ffmpeg.
+    segment_calls = [
+        call
+        for call in mock_popen.call_args_list
+        if any("normalized_clips" in str(token) and "segment_" in str(token) for token in call[0][0])
+    ]
+    assert segment_calls, "expected per-segment normalization ffmpeg calls"
+
+    # The normalized_clips dir is an intermediate: once concat has baked the
+    # segments into stitched.mp4 it is deleted to free page cache during the
+    # final encode, so it must NOT survive the render.
     normalized_dir = output_dir / "normalized_clips"
-    assert normalized_dir.exists()
+    assert not normalized_dir.exists()
 
 
 def test_render_video_with_ffmpeg_returns_correct_result_structure(tmp_path: Path, mocker) -> None:
