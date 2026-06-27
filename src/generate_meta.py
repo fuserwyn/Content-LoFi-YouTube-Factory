@@ -99,7 +99,7 @@ def generate_metadata(track_path: Path, tags_seed: list[str], theme: str | None 
     visuals = _visuals_slug(tags_seed, label)
     description = (
         f"Track: {track_name}\n"
-        f"Visuals: Licensed stock footage ({visuals}).\n\n"
+        f"Visuals: Original footage by LoFi Travel ({visuals}).\n\n"
         f"{_hashtag_line(tags_seed)}"
     )[:5000]
 

@@ -15,6 +15,7 @@ from .fetch_assets import ClipAsset, fetch_and_download_clips, load_local_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
 from .notify_n8n import send_run_notification
+from .remote_assets import S3SyncConfig, sync_assets
 from .render_video import RenderResult, render_video_with_ffmpeg
 from .select_track import choose_track
 from .state_store import RunRecord, StateStore, create_state_store
@@ -79,6 +80,28 @@ class PexelsRenderBundle:
     track_debug: dict[str, Any]
 
 
+def _sync_remote_assets(config: AppConfig, logger: Any) -> None:
+    """Pull source videos + tracks from S3/R2 into local asset dirs before rendering."""
+    if not config.assets_sync_enabled:
+        return
+    sync_cfg = S3SyncConfig(
+        enabled=config.assets_sync_enabled,
+        bucket=config.assets_s3_bucket,
+        endpoint_url=config.assets_s3_endpoint_url,
+        region=config.assets_s3_region,
+        access_key_id=config.assets_s3_access_key_id,
+        secret_access_key=config.assets_s3_secret_access_key,
+        videos_prefix=config.assets_s3_videos_prefix,
+        tracks_prefix=config.assets_s3_tracks_prefix,
+    )
+    logger.info("REMOTE_SYNC: syncing assets from bucket=%s", config.assets_s3_bucket)
+    sync_assets(
+        sync_cfg,
+        videos_dir=config.assets_source_videos_dir,
+        tracks_dir=config.assets_tracks_dir,
+    )
+
+
 def render_pexels_track_bundle(
     *,
     config: AppConfig,
@@ -89,6 +112,7 @@ def render_pexels_track_bundle(
     allow_recent_preferred: bool,
 ) -> PexelsRenderBundle:
     """Fetch clips (Pexels or local), pick track, render final MP4 — shared by CLI run and webhook."""
+    _sync_remote_assets(config, logger)
     recent_tracks = set(store.recent_tracks(config.max_recent_track_lookback))
     recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
 

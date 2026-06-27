@@ -10,7 +10,7 @@ def test_generate_metadata_has_required_fields() -> None:
 
     assert "night wave 01" in meta.title.lower()
     assert "Track: night wave 01" in meta.description
-    assert "Visuals: Licensed stock footage (ocean/sunset/lofi)" in meta.description
+    assert "Visuals: Original footage by LoFi Travel (ocean/sunset/lofi)" in meta.description
     assert "#lofi" in meta.description
     assert "#ocean" in meta.description or "#sunset" in meta.description
     assert len(meta.tags) <= 15

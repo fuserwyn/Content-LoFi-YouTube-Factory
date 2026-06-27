@@ -53,6 +53,14 @@ class AppConfig:
     use_local_videos_only: bool
     local_videos_fallback_to_pexels: bool
     assets_source_videos_dir: Path
+    assets_sync_enabled: bool
+    assets_s3_bucket: str
+    assets_s3_endpoint_url: str
+    assets_s3_region: str
+    assets_s3_access_key_id: str
+    assets_s3_secret_access_key: str
+    assets_s3_videos_prefix: str
+    assets_s3_tracks_prefix: str
     run_mode: str
     trigger_api_key: str
     no_repeat_clips_in_single_video: bool
@@ -255,6 +263,18 @@ def load_config() -> AppConfig:
         use_local_videos_only=_parse_bool("USE_LOCAL_VIDEOS_ONLY", False),
         local_videos_fallback_to_pexels=_parse_bool("LOCAL_VIDEOS_FALLBACK_TO_PEXELS", True),
         assets_source_videos_dir=assets_source_videos_dir,
+        assets_sync_enabled=_parse_bool("ASSETS_SYNC_ENABLED", False),
+        assets_s3_bucket=os.getenv("ASSETS_S3_BUCKET", "").strip(),
+        assets_s3_endpoint_url=os.getenv("ASSETS_S3_ENDPOINT_URL", "").strip(),
+        assets_s3_region=os.getenv("ASSETS_S3_REGION", "").strip(),
+        assets_s3_access_key_id=_env_with_fallback(
+            "ASSETS_S3_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID", ""
+        ),
+        assets_s3_secret_access_key=_env_with_fallback(
+            "ASSETS_S3_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY", ""
+        ),
+        assets_s3_videos_prefix=os.getenv("ASSETS_S3_VIDEOS_PREFIX", "source_videos").strip(),
+        assets_s3_tracks_prefix=os.getenv("ASSETS_S3_TRACKS_PREFIX", "tracks").strip(),
         run_mode=run_mode,
         trigger_api_key=os.getenv("TRIGGER_API_KEY", "").strip(),
         no_repeat_clips_in_single_video=_parse_bool("NO_REPEAT_CLIPS_IN_SINGLE_VIDEO", False),
