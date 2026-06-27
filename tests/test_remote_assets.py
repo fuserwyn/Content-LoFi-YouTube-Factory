@@ -99,6 +99,29 @@ def test_sync_assets_pulls_videos_and_tracks(tmp_path: Path) -> None:
     assert [p.name for p in result["tracks"]] == ["song.mp3"]
 
 
+def test_sync_assets_tracks_only_skips_videos(tmp_path: Path) -> None:
+    client = FakeS3Client(
+        {
+            "source_videos/clip.mp4": b"clip",
+            "tracks/song.mp3": b"track",
+        }
+    )
+    videos_dir = tmp_path / "v"
+    tracks_dir = tmp_path / "t"
+
+    result = sync_assets(
+        _cfg(),
+        videos_dir=videos_dir,
+        tracks_dir=tracks_dir,
+        client=client,
+        include_videos=False,
+    )
+
+    assert result["videos"] == []
+    assert [p.name for p in result["tracks"]] == ["song.mp3"]
+    assert "source_videos/clip.mp4" not in client.downloads
+
+
 def test_sync_assets_disabled_is_noop(tmp_path: Path) -> None:
     client = FakeS3Client({"tracks/song.mp3": b"track"})
     result = sync_assets(

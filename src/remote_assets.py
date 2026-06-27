@@ -92,8 +92,13 @@ def sync_assets(
     videos_dir: Path,
     tracks_dir: Path,
     client=None,
+    include_videos: bool = True,
+    include_tracks: bool = True,
 ) -> dict[str, list[Path]]:
-    """Pull source videos and tracks from the bucket into local asset dirs.
+    """Pull source videos and/or tracks from the bucket into local asset dirs.
+
+    ``include_videos=False`` lets lightweight callers (e.g. GET /tracks) refresh just the
+    track list without downloading the much larger video library.
 
     No-op (returns empties) when sync is disabled. Failures are logged and re-raised by the
     caller's discretion; here we surface them so a misconfigured bucket fails loudly.
@@ -108,20 +113,24 @@ def sync_assets(
     if client is None:
         client = build_s3_client(cfg)
 
-    videos = sync_prefix(
-        client,
-        bucket=cfg.bucket,
-        prefix=cfg.videos_prefix,
-        dest_dir=videos_dir,
-        allowed_suffixes=LOCAL_VIDEO_EXTENSIONS,
-    )
-    tracks = sync_prefix(
-        client,
-        bucket=cfg.bucket,
-        prefix=cfg.tracks_prefix,
-        dest_dir=tracks_dir,
-        allowed_suffixes=TRACK_EXTENSIONS,
-    )
+    videos: list[Path] = []
+    if include_videos:
+        videos = sync_prefix(
+            client,
+            bucket=cfg.bucket,
+            prefix=cfg.videos_prefix,
+            dest_dir=videos_dir,
+            allowed_suffixes=LOCAL_VIDEO_EXTENSIONS,
+        )
+    tracks: list[Path] = []
+    if include_tracks:
+        tracks = sync_prefix(
+            client,
+            bucket=cfg.bucket,
+            prefix=cfg.tracks_prefix,
+            dest_dir=tracks_dir,
+            allowed_suffixes=TRACK_EXTENSIONS,
+        )
     LOGGER.info(
         "REMOTE_SYNC: complete bucket=%s new_videos=%d new_tracks=%d",
         cfg.bucket,

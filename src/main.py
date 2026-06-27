@@ -80,8 +80,14 @@ class PexelsRenderBundle:
     track_debug: dict[str, Any]
 
 
-def _sync_remote_assets(config: AppConfig, logger: Any) -> None:
-    """Pull source videos + tracks from S3/R2 into local asset dirs before rendering."""
+def _sync_remote_assets(
+    config: AppConfig,
+    logger: Any,
+    *,
+    include_videos: bool = True,
+    include_tracks: bool = True,
+) -> None:
+    """Pull source videos + tracks from S3/R2 into local asset dirs before rendering/listing."""
     if not config.assets_sync_enabled:
         return
     sync_cfg = S3SyncConfig(
@@ -99,6 +105,8 @@ def _sync_remote_assets(config: AppConfig, logger: Any) -> None:
         sync_cfg,
         videos_dir=config.assets_source_videos_dir,
         tracks_dir=config.assets_tracks_dir,
+        include_videos=include_videos,
+        include_tracks=include_tracks,
     )
 
 

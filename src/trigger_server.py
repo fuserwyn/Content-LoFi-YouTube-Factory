@@ -16,7 +16,7 @@ import uvicorn
 from .config import AppConfig, resolve_youtube_refresh_token
 from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
-from .main import PexelsRenderBundle, _cleanup_temp_files, render_pexels_track_bundle, run as pipeline_run
+from .main import PexelsRenderBundle, _cleanup_temp_files, _sync_remote_assets, render_pexels_track_bundle, run as pipeline_run
 from .state_store import RunRecord, create_state_store
 from .notify_telegram import send_files_to_telegram, send_message_to_telegram
 from .video_generation import generate_external_video
@@ -889,6 +889,13 @@ def start_trigger_server(config: AppConfig) -> None:
         provided_key = x_trigger_key or ""
         if config.trigger_api_key and provided_key != config.trigger_api_key:
             raise HTTPException(status_code=401, detail="unauthorized")
+
+        # Refresh the track list from R2 (tracks only — skip the heavy video pull) so n8n's
+        # Route node sees the real catalog even on a fresh container before any render ran.
+        try:
+            _sync_remote_assets(config, logger, include_videos=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TRACKS: remote track sync failed, listing local only: %s", exc)
 
         tracks_dir = _resolve_tracks_dir(None, config)
         paths = [
