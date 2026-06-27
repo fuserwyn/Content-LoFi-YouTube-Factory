@@ -265,6 +265,9 @@ def _build_motion_plan(
     avoid_clip_reuse: bool = False,
     allow_shorter_output: bool = True,
 ) -> list[MotionSegment]:
+    # Track-matched durations are fractional (e.g. 90.23s); segment math feeds random.randint
+    # and ffmpeg, both of which need whole seconds. Floor once here so every downstream value is int.
+    target_duration_seconds = int(target_duration_seconds)
     if avoid_clip_reuse:
         return _build_unique_motion_plan(
             clips=clips,

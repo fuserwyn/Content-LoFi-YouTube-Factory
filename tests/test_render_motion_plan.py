@@ -34,6 +34,24 @@ def test_motion_plan_reaches_target_duration() -> None:
     assert len(plan) > 1
 
 
+def test_motion_plan_accepts_fractional_target_duration() -> None:
+    # Track-matched durations are floats (e.g. 90.23s); planning must not crash on random.randint.
+    random.seed(11)
+    clips = [_clip(1, 30), _clip(2, 45), _clip(3, 60)]
+    plan = _build_motion_plan(
+        clips=clips,
+        target_duration_seconds=90.226939,
+        min_segment_seconds=6,
+        max_segment_seconds=12,
+    )
+
+    assert len(plan) > 1
+    for item in plan:
+        assert isinstance(item.start_second, int)
+        assert isinstance(item.duration_second, int)
+    assert sum(item.duration_second for item in plan) == 90
+
+
 def test_motion_plan_segment_bounds() -> None:
     random.seed(3)
     clips = [_clip(1, 10)]
