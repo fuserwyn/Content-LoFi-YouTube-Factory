@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+YOUTUBE_OAUTH_SCOPES = [YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE]
 
 
 @dataclass
@@ -36,7 +38,7 @@ def create_authorization_flow(
 
     return Flow.from_client_config(
         build_web_client_config(client_id, client_secret, redirect_uri),
-        scopes=[YOUTUBE_UPLOAD_SCOPE],
+        scopes=list(YOUTUBE_OAUTH_SCOPES),
         redirect_uri=redirect_uri,
     )
 

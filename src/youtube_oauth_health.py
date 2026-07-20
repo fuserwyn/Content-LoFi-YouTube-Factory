@@ -6,6 +6,10 @@ from typing import Any
 from .config import AppConfig, resolve_youtube_refresh_token
 from .youtube_oauth_store import get_stored_refresh_token
 
+# Must match scopes used when the refresh token was issued (see youtube_oauth_web.py).
+# Requesting extra scopes on refresh causes Google invalid_scope.
+YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+
 
 @dataclass
 class YouTubeTokenProbeResult:
@@ -40,10 +44,7 @@ def _fetch_mine_channel(
         token_uri="https://oauth2.googleapis.com/token",
         client_id=client_id,
         client_secret=client_secret,
-        scopes=[
-            "https://www.googleapis.com/auth/youtube.upload",
-            "https://www.googleapis.com/auth/youtube.readonly",
-        ],
+        scopes=[YOUTUBE_UPLOAD_SCOPE],
     )
     try:
         creds.refresh(Request())
@@ -57,8 +58,11 @@ def _fetch_mine_channel(
         youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
         response = youtube.channels().list(part="snippet", mine=True).execute()
     except Exception as exc:  # noqa: BLE001
-        # Token is alive even if channel lookup fails (scope/API hiccup).
-        return True, f"access token ok; channel lookup failed: {exc}", {}
+        return (
+            True,
+            f"access token ok; channel lookup failed (re-auth may be needed for channel name): {exc}",
+            {},
+        )
 
     items = response.get("items") or []
     if not items:
