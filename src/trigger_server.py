@@ -31,7 +31,7 @@ from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
 from .upload_youtube import upload_video
 from .n8n_short_queue import ack_publish, peek_next_job, persist_queue_after_render
-from .youtube_oauth_health import probe_all_profiles, probe_config_profile
+from .youtube_oauth_health import probe_all_profiles, probe_config_profile, _profile_dict
 from .youtube_oauth_store import oauth_status, save_refresh_token, token_store_path
 from .youtube_oauth_web import PendingOAuth, complete_authorization, start_authorization
 
