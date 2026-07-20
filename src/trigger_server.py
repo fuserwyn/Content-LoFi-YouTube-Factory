@@ -805,24 +805,21 @@ def start_trigger_server(config: AppConfig) -> None:
             item = probe_config_profile(config, profile)
             payload = {
                 "ok": item.ok,
-                "profiles": [
-                    {
-                        "profile": item.profile,
-                        "ok": item.ok,
-                        "message": item.message,
-                        "token_source": item.token_source,
-                    }
-                ],
+                "profiles": [_profile_dict(item)],
             }
         else:
             payload = probe_all_profiles(config)
 
         if notify_telegram and config.telegram_bot_token and config.telegram_chat_id:
             if payload.get("ok"):
+                titles = [
+                    f"{p.get('profile')}: {p.get('channel_title') or p.get('channel_id') or 'ok'}"
+                    for p in payload.get("profiles", [])
+                ]
                 send_message_to_telegram(
                     config.telegram_bot_token,
                     config.telegram_chat_id,
-                    "YouTube OAuth probe: OK (refresh token is valid).",
+                    "YouTube OAuth probe: OK\n" + "\n".join(titles),
                 )
             else:
                 lines = ["YouTube OAuth probe: FAILED — re-auth required."]
