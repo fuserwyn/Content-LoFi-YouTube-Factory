@@ -30,6 +30,7 @@ class AppConfig:
     target_height: int
     fps: int
     max_clips_per_run: int
+    source_videos_batch_size: int
     min_clip_seconds: int
     max_recent_track_lookback: int
     max_recent_clip_lookback: int
@@ -240,6 +241,7 @@ def load_config() -> AppConfig:
         target_height=int(os.getenv("TARGET_HEIGHT", "1080")),
         fps=int(os.getenv("FPS", "30")),
         max_clips_per_run=int(os.getenv("MAX_CLIPS_PER_RUN", "20")),
+        source_videos_batch_size=max(1, int(os.getenv("SOURCE_VIDEOS_BATCH_SIZE", "5"))),
         min_clip_seconds=int(os.getenv("MIN_CLIP_SECONDS", "5")),
         max_recent_track_lookback=int(os.getenv("MAX_RECENT_TRACK_LOOKBACK", "10")),
         max_recent_clip_lookback=int(os.getenv("MAX_RECENT_CLIP_LOOKBACK", "100")),

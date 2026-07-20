@@ -51,6 +51,7 @@ def test_state_store_clear_used_clips(tmp_path: Path) -> None:
     store = SQLiteStateStore(db_path)
     store.mark_clips_used(["clip_a", "clip_b"])
     assert len(store.recent_clips(10)) == 2
+    assert store.all_used_clips() == ["clip_a", "clip_b"]
     deleted = store.clear_used_clips()
     assert deleted == 2
     assert store.recent_clips(10) == []

@@ -29,6 +29,7 @@ def _make_test_config(tmp_path: Path) -> AppConfig:
         target_height=1080,
         fps=30,
         max_clips_per_run=5,
+        source_videos_batch_size=5,
         min_clip_seconds=10,
         max_recent_track_lookback=10,
         max_recent_clip_lookback=50,

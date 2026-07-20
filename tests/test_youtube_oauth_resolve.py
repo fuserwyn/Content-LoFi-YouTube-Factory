@@ -27,6 +27,7 @@ def _minimal_config(**kwargs: str) -> AppConfig:
         target_height=1080,
         fps=30,
         max_clips_per_run=20,
+        source_videos_batch_size=5,
         min_clip_seconds=5,
         max_recent_track_lookback=10,
         max_recent_clip_lookback=100,

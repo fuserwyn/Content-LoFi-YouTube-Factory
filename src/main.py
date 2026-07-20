@@ -15,7 +15,14 @@ from .fetch_assets import ClipAsset, fetch_and_download_clips, load_local_clips
 from .generate_meta import generate_metadata
 from .logger import setup_logger
 from .notify_n8n import send_run_notification
-from .remote_assets import S3SyncConfig, sync_assets
+from .remote_assets import (
+    S3SyncConfig,
+    build_s3_client,
+    delete_local_source_videos,
+    download_source_video_batch,
+    sync_assets,
+    used_clip_filenames,
+)
 from .render_video import RenderResult, render_video_with_ffmpeg
 from .select_track import choose_track
 from .state_store import RunRecord, StateStore, create_state_store
@@ -70,6 +77,23 @@ def _probe_audio_duration_seconds(audio_path: Path) -> float | None:
         return None
 
 
+def mark_and_cleanup_source_clips(
+    *,
+    store: StateStore,
+    clips: list[ClipAsset],
+    videos_dir: Path,
+    logger: Any,
+) -> None:
+    """Keep DB filename markers; delete local source files after a successful publish/render."""
+    markers = [c.source_url for c in clips]
+    if markers:
+        store.mark_clips_used(markers)
+        logger.info("STATE_SAVE: marked %d source videos used (filenames)", len(markers))
+    deleted = delete_local_source_videos(clips, videos_dir)
+    if deleted:
+        logger.info("CLEANUP: removed %d local source videos after publish", deleted)
+
+
 @dataclass(frozen=True)
 class PexelsRenderBundle:
     render_result: RenderResult
@@ -110,6 +134,19 @@ def _sync_remote_assets(
     )
 
 
+def _s3_sync_cfg(config: AppConfig) -> S3SyncConfig:
+    return S3SyncConfig(
+        enabled=config.assets_sync_enabled,
+        bucket=config.assets_s3_bucket,
+        endpoint_url=config.assets_s3_endpoint_url,
+        region=config.assets_s3_region,
+        access_key_id=config.assets_s3_access_key_id,
+        secret_access_key=config.assets_s3_secret_access_key,
+        videos_prefix=config.assets_s3_videos_prefix,
+        tracks_prefix=config.assets_s3_tracks_prefix,
+    )
+
+
 def render_pexels_track_bundle(
     *,
     config: AppConfig,
@@ -119,10 +156,11 @@ def render_pexels_track_bundle(
     preferred_track: str | None,
     allow_recent_preferred: bool,
 ) -> PexelsRenderBundle:
-    """Fetch clips (Pexels or local), pick track, render final MP4 — shared by CLI run and webhook."""
-    _sync_remote_assets(config, logger)
+    """Fetch clips (Pexels or local/S3 batch), pick track, render final MP4 — shared by CLI run and webhook."""
+    # Tracks: mirror from R2. Videos: batch-download only what this run needs (not the whole library).
+    _sync_remote_assets(config, logger, include_videos=False, include_tracks=True)
     recent_tracks = set(store.recent_tracks(config.max_recent_track_lookback))
-    recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
+    used_names = used_clip_filenames(store.all_used_clips())
 
     track_debug: dict[str, Any] = {}
     try:
@@ -136,8 +174,60 @@ def render_pexels_track_bundle(
     except Exception as exc:  # noqa: BLE001
         logger.warning("TRACK_DEBUG: failed to snapshot tracks_dir: %s", exc)
 
+    logger.info("TRACK_SELECT: selecting music track")
+    selected_track = choose_track(
+        config.assets_tracks_dir,
+        recent_tracks,
+        preferred_track=preferred_track,
+        allow_recent_preferred=allow_recent_preferred,
+    )
+    target_duration_seconds = float(config.target_duration_min * 60)
+    if config.match_video_duration_to_track:
+        track_duration = _probe_audio_duration_seconds(selected_track)
+        if track_duration is not None:
+            target_duration_seconds = track_duration
+            logger.info("RENDER: matched duration to track length=%ss", track_duration)
+        else:
+            logger.warning(
+                "RENDER: failed to probe track duration, fallback to TARGET_DURATION_MIN=%s",
+                config.target_duration_min,
+            )
+
     clips: list[ClipAsset] = []
-    if config.use_local_videos_only:
+    force_no_repeat = False
+    use_s3_batch = bool(config.use_local_videos_only and config.assets_sync_enabled and config.assets_s3_bucket)
+
+    if use_s3_batch:
+        logger.info(
+            "FETCH: S3 batch mode | used_markers=%d batch_size=%d need_seconds=%.1f",
+            len(used_names),
+            config.source_videos_batch_size,
+            target_duration_seconds,
+        )
+        client = build_s3_client(_s3_sync_cfg(config))
+        clips, _markers, started_new_cycle = download_source_video_batch(
+            client,
+            bucket=config.assets_s3_bucket,
+            prefix=config.assets_s3_videos_prefix,
+            dest_dir=config.assets_source_videos_dir,
+            used_filenames=used_names,
+            batch_size=config.source_videos_batch_size,
+            min_total_seconds=target_duration_seconds,
+            min_clip_seconds=config.min_clip_seconds,
+            min_width=config.target_width,
+            min_height=config.target_height,
+        )
+        if started_new_cycle:
+            cleared = store.clear_used_clips()
+            logger.info("STATE_SAVE: new footage cycle — cleared %d used_clips markers", cleared)
+        force_no_repeat = True
+        if not clips and config.local_videos_fallback_to_pexels:
+            logger.info("FETCH: S3 batch empty, falling back to Pexels")
+        elif not clips:
+            logger.error("FETCH: S3 batch returned no valid clips")
+
+    elif config.use_local_videos_only:
+        recent_clips = set(store.recent_clips(config.max_recent_clip_lookback))
         logger.info(
             "FETCH: loading clips from local source videos | dir=%s recent_lookback=%d",
             config.assets_source_videos_dir,
@@ -151,23 +241,19 @@ def render_pexels_track_bundle(
             min_height=config.target_height,
             recently_used_clip_urls=recent_clips,
         )
-        # Soft no-repeat: markers only (not media). When every clip was used, reset
-        # used_clips and start a new cycle so renders never fail and footage rotates.
         if not clips and recent_clips:
             deleted = store.clear_used_clips()
             logger.warning(
-                "FETCH: unused local clips exhausted (lookback=%d); soft-reset used_clips=%d and starting new cycle",
-                len(recent_clips),
+                "FETCH: unused local clips exhausted; soft-reset used_clips=%d",
                 deleted,
             )
-            recent_clips = set()
             clips = load_local_clips(
                 source_dir=config.assets_source_videos_dir,
                 max_clips=config.max_clips_per_run,
                 min_clip_seconds=config.min_clip_seconds,
                 min_width=config.target_width,
                 min_height=config.target_height,
-                recently_used_clip_urls=recent_clips,
+                recently_used_clip_urls=set(),
             )
         if not clips and config.local_videos_fallback_to_pexels:
             logger.info("FETCH: local clips unavailable, falling back to Pexels")
@@ -190,33 +276,19 @@ def render_pexels_track_bundle(
             min_clip_seconds=config.min_clip_seconds,
             min_width=config.target_width,
             min_height=config.target_height,
-            recently_used_clip_urls=recent_clips,
+            recently_used_clip_urls=set(store.recent_clips(config.max_recent_clip_lookback)),
             per_page=config.pexels_per_page,
             pages_per_tag=config.pexels_pages_per_tag,
         )
     if not clips:
         raise RuntimeError("No valid clips available from local source videos or Pexels.")
 
-    logger.info("TRACK_SELECT: selecting music track")
-    selected_track = choose_track(
-        config.assets_tracks_dir,
-        recent_tracks,
-        preferred_track=preferred_track,
-        allow_recent_preferred=allow_recent_preferred,
+    no_repeat = True if force_no_repeat else config.no_repeat_clips_in_single_video
+    logger.info(
+        "RENDER: composing final video with FFmpeg | clips=%d no_repeat=%s",
+        len(clips),
+        no_repeat,
     )
-    target_duration_seconds = float(config.target_duration_min * 60)
-    if config.match_video_duration_to_track:
-        track_duration = _probe_audio_duration_seconds(selected_track)
-        if track_duration is not None:
-            target_duration_seconds = track_duration
-            logger.info("RENDER: matched duration to track length=%ss", track_duration)
-        else:
-            logger.warning(
-                "RENDER: failed to probe track duration, fallback to TARGET_DURATION_MIN=%s",
-                config.target_duration_min,
-            )
-
-    logger.info("RENDER: composing final video with FFmpeg")
     render_result = render_video_with_ffmpeg(
         clips=clips,
         track_path=selected_track,
@@ -227,7 +299,7 @@ def render_pexels_track_bundle(
         fps=config.fps,
         encode_preset=config.render_preset,
         crf=config.render_crf,
-        no_repeat_clips_in_single_video=config.no_repeat_clips_in_single_video,
+        no_repeat_clips_in_single_video=no_repeat,
         allow_shorter_unique_video=config.allow_shorter_unique_video,
     )
 
@@ -236,7 +308,7 @@ def render_pexels_track_bundle(
         clips=clips,
         selected_track=selected_track,
         effective_tags=effective_tags,
-        target_duration_seconds=target_duration_seconds,
+        target_duration_seconds=int(target_duration_seconds),
         track_debug=track_debug,
     )
 
@@ -363,9 +435,14 @@ def run(
         else:
             report_payload["upload"] = {"status": "skipped", "reason": "UPLOAD_ENABLED=false"}
 
-        logger.info("STATE_SAVE: marking used track and clips (markers only)")
+        logger.info("STATE_SAVE: marking used track; mark+delete source videos")
         store.mark_track_used(track_path)
-        store.mark_clips_used([c.source_url for c in clips])
+        mark_and_cleanup_source_clips(
+            store=store,
+            clips=clips,
+            videos_dir=config.assets_source_videos_dir,
+            logger=logger,
+        )
         report_payload["clips"] = [
             {
                 "source_video_id": c.source_video_id,

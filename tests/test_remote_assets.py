@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from src.remote_assets import S3SyncConfig, sync_assets, sync_prefix
+from src.remote_assets import (
+    RemoteObject,
+    S3SyncConfig,
+    build_source_video_queue,
+    sync_assets,
+    sync_prefix,
+    used_clip_filenames,
+)
 
 
 class FakeS3Client:
@@ -139,3 +146,52 @@ def test_sync_assets_requires_bucket(tmp_path: Path) -> None:
             tracks_dir=tmp_path / "t",
             client=FakeS3Client({}),
         )
+
+
+def test_used_clip_filenames_normalizes_paths() -> None:
+    assert used_clip_filenames({"/app/assets/source_videos/a.MOV", "b.mp4"}) == {"a.MOV", "b.mp4"}
+
+
+def test_build_source_video_queue_unused_then_wrap() -> None:
+    remote = [
+        RemoteObject(key="source_videos/a.mp4", filename="a.mp4", size=1),
+        RemoteObject(key="source_videos/b.mp4", filename="b.mp4", size=1),
+        RemoteObject(key="source_videos/c.mp4", filename="c.mp4", size=1),
+        RemoteObject(key="source_videos/d.mp4", filename="d.mp4", size=1),
+        RemoteObject(key="source_videos/e.mp4", filename="e.mp4", size=1),
+    ]
+    # Only c,d,e unused → queue starts with those, then wraps a,b
+    queue, new_cycle = build_source_video_queue(remote, {"a.mp4", "b.mp4"})
+    assert new_cycle is False
+    assert [o.filename for o in queue] == ["c.mp4", "d.mp4", "e.mp4", "a.mp4", "b.mp4"]
+
+
+def test_build_source_video_queue_all_used_starts_new_cycle() -> None:
+    remote = [
+        RemoteObject(key="source_videos/a.mp4", filename="a.mp4", size=1),
+        RemoteObject(key="source_videos/b.mp4", filename="b.mp4", size=1),
+    ]
+    queue, new_cycle = build_source_video_queue(remote, {"a.mp4", "b.mp4"})
+    assert new_cycle is True
+    assert [o.filename for o in queue] == ["a.mp4", "b.mp4"]
+
+
+def test_sync_prefix_skips_used_filenames(tmp_path: Path) -> None:
+    client = FakeS3Client(
+        {
+            "source_videos/a.mp4": b"video-a",
+            "source_videos/b.mp4": b"video-b",
+        }
+    )
+    dest = tmp_path / "videos"
+    downloaded = sync_prefix(
+        client,
+        bucket="bucket",
+        prefix="source_videos",
+        dest_dir=dest,
+        allowed_suffixes={".mp4"},
+        skip_filenames={"a.mp4"},
+        max_downloads=10,
+    )
+    assert [p.name for p in downloaded] == ["b.mp4"]
+    assert client.downloads == ["source_videos/b.mp4"]

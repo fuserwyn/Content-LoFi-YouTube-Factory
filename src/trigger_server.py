@@ -16,7 +16,14 @@ import uvicorn
 from .config import AppConfig, resolve_youtube_refresh_token
 from .generate_meta import VideoMeta, generate_metadata
 from .logger import setup_logger
-from .main import PexelsRenderBundle, _cleanup_temp_files, _sync_remote_assets, render_pexels_track_bundle, run as pipeline_run
+from .main import (
+    PexelsRenderBundle,
+    _cleanup_temp_files,
+    _sync_remote_assets,
+    mark_and_cleanup_source_clips,
+    render_pexels_track_bundle,
+    run as pipeline_run,
+)
 from .state_store import RunRecord, create_state_store
 from .notify_telegram import send_files_to_telegram, send_message_to_telegram
 from .video_generation import generate_external_video
@@ -1022,7 +1029,12 @@ def start_trigger_server(config: AppConfig) -> None:
             youtube_video_id = publication.get("main_video", {}).get("video_id", "") or ""
 
             store.mark_track_used(track_path_str)
-            store.mark_clips_used([c.source_url for c in bundle.clips])
+            mark_and_cleanup_source_clips(
+                store=store,
+                clips=bundle.clips,
+                videos_dir=config.assets_source_videos_dir,
+                logger=logger,
+            )
             store.save_run(
                 RunRecord(
                     run_id=run_id,
@@ -1124,7 +1136,12 @@ def start_trigger_server(config: AppConfig) -> None:
             youtube_video_id = workflow_result.get("main_video", {}).get("video_id", "") or ""
 
             store.mark_track_used(track_path_str)
-            store.mark_clips_used([c.source_url for c in bundle.clips])
+            mark_and_cleanup_source_clips(
+                store=store,
+                clips=bundle.clips,
+                videos_dir=config.assets_source_videos_dir,
+                logger=logger,
+            )
             store.save_run(
                 RunRecord(
                     run_id=run_id,

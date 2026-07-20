@@ -30,6 +30,9 @@ class StateStore(Protocol):
     def recent_clips(self, limit: int) -> list[str]:
         ...
 
+    def all_used_clips(self) -> list[str]:
+        ...
+
     def mark_track_used(self, track_path: str) -> None:
         ...
 
@@ -103,6 +106,11 @@ class SQLiteStateStore:
             "SELECT clip_url FROM used_clips ORDER BY used_at DESC LIMIT ?",
             (limit,),
         )
+        return [row["clip_url"] for row in cur.fetchall()]
+
+    def all_used_clips(self) -> list[str]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT clip_url FROM used_clips ORDER BY used_at ASC")
         return [row["clip_url"] for row in cur.fetchall()]
 
     def mark_track_used(self, track_path: str) -> None:
@@ -210,6 +218,11 @@ class PostgresStateStore:
                 "SELECT clip_url FROM used_clips ORDER BY used_at DESC LIMIT %s",
                 (limit,),
             )
+            return [row[0] for row in cur.fetchall()]
+
+    def all_used_clips(self) -> list[str]:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT clip_url FROM used_clips ORDER BY used_at ASC")
             return [row[0] for row in cur.fetchall()]
 
     def mark_track_used(self, track_path: str) -> None:
