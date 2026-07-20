@@ -151,10 +151,23 @@ def render_pexels_track_bundle(
             min_height=config.target_height,
             recently_used_clip_urls=recent_clips,
         )
-        if clips and recent_clips and all(c.source_url in recent_clips for c in clips):
+        # Soft no-repeat: markers only (not media). When every clip was used, reset
+        # used_clips and start a new cycle so renders never fail and footage rotates.
+        if not clips and recent_clips:
+            deleted = store.clear_used_clips()
             logger.warning(
-                "FETCH: all unused local clips exhausted (lookback=%d); reusing recent footage",
+                "FETCH: unused local clips exhausted (lookback=%d); soft-reset used_clips=%d and starting new cycle",
                 len(recent_clips),
+                deleted,
+            )
+            recent_clips = set()
+            clips = load_local_clips(
+                source_dir=config.assets_source_videos_dir,
+                max_clips=config.max_clips_per_run,
+                min_clip_seconds=config.min_clip_seconds,
+                min_width=config.target_width,
+                min_height=config.target_height,
+                recently_used_clip_urls=recent_clips,
             )
         if not clips and config.local_videos_fallback_to_pexels:
             logger.info("FETCH: local clips unavailable, falling back to Pexels")
@@ -350,11 +363,9 @@ def run(
         else:
             report_payload["upload"] = {"status": "skipped", "reason": "UPLOAD_ENABLED=false"}
 
-        logger.info("STATE_SAVE: marking used track; clearing used_clips after publish")
+        logger.info("STATE_SAVE: marking used track and clips (markers only)")
         store.mark_track_used(track_path)
-        deleted_clips = store.clear_used_clips()
-        if deleted_clips:
-            logger.info("STATE_SAVE: cleared %d used_clips rows", deleted_clips)
+        store.mark_clips_used([c.source_url for c in clips])
         report_payload["clips"] = [
             {
                 "source_video_id": c.source_video_id,

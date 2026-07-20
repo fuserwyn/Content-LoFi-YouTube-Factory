@@ -139,7 +139,14 @@ def load_local_clips(
     min_width: int,
     min_height: int,
     recently_used_clip_urls: set[str],
+    *,
+    reuse_if_exhausted: bool = False,
 ) -> list[ClipAsset]:
+    """Load local footage, preferring URLs not in ``recently_used_clip_urls``.
+
+    When ``reuse_if_exhausted`` is False (default), returns [] if every valid file was
+    already used — caller can soft-reset markers and retry for a new no-repeat cycle.
+    """
     files = [p for p in source_dir.glob("*") if p.is_file() and p.suffix.lower() in LOCAL_VIDEO_EXTENSIONS]
     random.shuffle(files)
 
@@ -178,9 +185,8 @@ def load_local_clips(
             )
         return selected
 
-    # Prefer unused footage; if the lookback exhausted the pool, reuse so renders don't fail.
     selected = _select(skip_recent=True)
-    if not selected and files and recently_used_clip_urls:
+    if not selected and reuse_if_exhausted and files and recently_used_clip_urls:
         selected = _select(skip_recent=False)
     return selected
 

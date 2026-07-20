@@ -597,20 +597,6 @@ def start_trigger_server(config: AppConfig) -> None:
     app = FastAPI()
     run_lock = threading.Lock()
 
-    @app.on_event("startup")
-    def _clear_stale_used_clips_on_startup() -> None:
-        # Clip reuse history is no longer kept across publishes; wipe leftovers so renders
-        # are not blocked by an exhausted used_clips table on the data volume.
-        store = create_state_store(config.state_db_path, database_url=config.database_url)
-        try:
-            deleted = store.clear_used_clips()
-            if deleted:
-                logger.info("STATE_SAVE: startup cleared %d stale used_clips", deleted)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("STATE_SAVE: startup clear_used_clips failed: %s", exc)
-        finally:
-            store.close()
-
     def _publish_main_and_shorts(payload: PublishVideoWithShortsRequest) -> dict:
         return publish_main_and_shorts_impl(config=config, logger=logger, payload=payload)
 
@@ -734,7 +720,7 @@ def start_trigger_server(config: AppConfig) -> None:
 
     @app.post("/workflow/clear-used-clips")
     def workflow_clear_used_clips(x_trigger_key: str | None = Header(default=None)) -> dict:
-        """Wipe used_clips so the local/R2 pool can be reused (does not delete media files)."""
+        """Wipe used_clips markers only (not media files). Manual soft-reset of no-repeat cycle."""
         provided_key = x_trigger_key or ""
         if config.trigger_api_key and provided_key != config.trigger_api_key:
             raise HTTPException(status_code=401, detail="unauthorized")
@@ -1036,10 +1022,7 @@ def start_trigger_server(config: AppConfig) -> None:
             youtube_video_id = publication.get("main_video", {}).get("video_id", "") or ""
 
             store.mark_track_used(track_path_str)
-            # Do not accumulate used_clips — reuse pool after each successful publish.
-            deleted_clips = store.clear_used_clips()
-            if deleted_clips:
-                logger.info("STATE_SAVE: cleared %d used_clips after publish", deleted_clips)
+            store.mark_clips_used([c.source_url for c in bundle.clips])
             store.save_run(
                 RunRecord(
                     run_id=run_id,
@@ -1141,10 +1124,7 @@ def start_trigger_server(config: AppConfig) -> None:
             youtube_video_id = workflow_result.get("main_video", {}).get("video_id", "") or ""
 
             store.mark_track_used(track_path_str)
-            # Do not accumulate used_clips — reuse pool after each successful publish.
-            deleted_clips = store.clear_used_clips()
-            if deleted_clips:
-                logger.info("STATE_SAVE: cleared %d used_clips after publish", deleted_clips)
+            store.mark_clips_used([c.source_url for c in bundle.clips])
             store.save_run(
                 RunRecord(
                     run_id=run_id,
