@@ -46,6 +46,17 @@ def test_state_store_saves_run_record(tmp_path: Path) -> None:
     assert row["youtube_video_id"] == "abc123"
 
 
+def test_state_store_clear_used_clips(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    store = SQLiteStateStore(db_path)
+    store.mark_clips_used(["clip_a", "clip_b"])
+    assert len(store.recent_clips(10)) == 2
+    deleted = store.clear_used_clips()
+    assert deleted == 2
+    assert store.recent_clips(10) == []
+    store.close()
+
+
 def test_create_state_store_defaults_to_sqlite(tmp_path: Path) -> None:
     db_path = tmp_path / "state.db"
     store = create_state_store(db_path, database_url="")

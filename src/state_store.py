@@ -36,6 +36,9 @@ class StateStore(Protocol):
     def mark_clips_used(self, clip_urls: list[str]) -> None:
         ...
 
+    def clear_used_clips(self) -> int:
+        ...
+
     def save_run(self, record: RunRecord) -> None:
         ...
 
@@ -118,6 +121,14 @@ class SQLiteStateStore:
             [(url, now) for url in clip_urls],
         )
         self.conn.commit()
+
+    def clear_used_clips(self) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT COUNT(*) AS n FROM used_clips")
+        count = int(cur.fetchone()["n"])
+        cur.execute("DELETE FROM used_clips")
+        self.conn.commit()
+        return count
 
     def save_run(self, record: RunRecord) -> None:
         cur = self.conn.cursor()
@@ -219,6 +230,14 @@ class PostgresStateStore:
                 [(url, now) for url in clip_urls],
             )
         self.conn.commit()
+
+    def clear_used_clips(self) -> int:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM used_clips")
+            count = int(cur.fetchone()[0])
+            cur.execute("DELETE FROM used_clips")
+        self.conn.commit()
+        return count
 
     def save_run(self, record: RunRecord) -> None:
         with self.conn.cursor() as cur:

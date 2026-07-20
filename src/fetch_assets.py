@@ -140,42 +140,48 @@ def load_local_clips(
     min_height: int,
     recently_used_clip_urls: set[str],
 ) -> list[ClipAsset]:
-    selected: list[ClipAsset] = []
     files = [p for p in source_dir.glob("*") if p.is_file() and p.suffix.lower() in LOCAL_VIDEO_EXTENSIONS]
     random.shuffle(files)
 
-    for index, path in enumerate(files):
-        if len(selected) >= max_clips:
-            break
+    def _select(skip_recent: bool) -> list[ClipAsset]:
+        selected: list[ClipAsset] = []
+        for index, path in enumerate(files):
+            if len(selected) >= max_clips:
+                break
 
-        source_url = path.as_posix()
-        if source_url in recently_used_clip_urls:
-            continue
+            source_url = path.as_posix()
+            if skip_recent and source_url in recently_used_clip_urls:
+                continue
 
-        metadata = _probe_video(path)
-        if not metadata:
-            continue
-        if metadata["duration"] < min_clip_seconds:
-            continue
-        if metadata["width"] < min_width or metadata["height"] < min_height:
-            continue
-        if metadata["width"] < metadata["height"]:
-            continue
+            metadata = _probe_video(path)
+            if not metadata:
+                continue
+            if metadata["duration"] < min_clip_seconds:
+                continue
+            if metadata["width"] < min_width or metadata["height"] < min_height:
+                continue
+            if metadata["width"] < metadata["height"]:
+                continue
 
-        selected.append(
-            ClipAsset(
-                source_video_id=index + 1,
-                source_url=source_url,
-                author_name="local",
-                download_url=source_url,
-                local_path=path,
-                width=metadata["width"],
-                height=metadata["height"],
-                duration=metadata["duration"],
-                license="local-owner",
+            selected.append(
+                ClipAsset(
+                    source_video_id=index + 1,
+                    source_url=source_url,
+                    author_name="local",
+                    download_url=source_url,
+                    local_path=path,
+                    width=metadata["width"],
+                    height=metadata["height"],
+                    duration=metadata["duration"],
+                    license="local-owner",
+                )
             )
-        )
+        return selected
 
+    # Prefer unused footage; if the lookback exhausted the pool, reuse so renders don't fail.
+    selected = _select(skip_recent=True)
+    if not selected and files and recently_used_clip_urls:
+        selected = _select(skip_recent=False)
     return selected
 
 

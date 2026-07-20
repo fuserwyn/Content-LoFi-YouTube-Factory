@@ -138,7 +138,11 @@ def render_pexels_track_bundle(
 
     clips: list[ClipAsset] = []
     if config.use_local_videos_only:
-        logger.info("FETCH: loading clips from local source videos")
+        logger.info(
+            "FETCH: loading clips from local source videos | dir=%s recent_lookback=%d",
+            config.assets_source_videos_dir,
+            len(recent_clips),
+        )
         clips = load_local_clips(
             source_dir=config.assets_source_videos_dir,
             max_clips=config.max_clips_per_run,
@@ -147,8 +151,21 @@ def render_pexels_track_bundle(
             min_height=config.target_height,
             recently_used_clip_urls=recent_clips,
         )
+        if clips and recent_clips and all(c.source_url in recent_clips for c in clips):
+            logger.warning(
+                "FETCH: all unused local clips exhausted (lookback=%d); reusing recent footage",
+                len(recent_clips),
+            )
         if not clips and config.local_videos_fallback_to_pexels:
             logger.info("FETCH: local clips unavailable, falling back to Pexels")
+        elif not clips:
+            logger.error(
+                "FETCH: no local clips (empty dir, wrong resolution, or all filtered). "
+                "dir=%s USE_LOCAL_VIDEOS_ONLY=%s FALLBACK_PEXELS=%s",
+                config.assets_source_videos_dir,
+                config.use_local_videos_only,
+                config.local_videos_fallback_to_pexels,
+            )
 
     if (not clips) and (not config.use_local_videos_only or config.local_videos_fallback_to_pexels):
         logger.info("FETCH: requesting clips from Pexels")
@@ -333,9 +350,11 @@ def run(
         else:
             report_payload["upload"] = {"status": "skipped", "reason": "UPLOAD_ENABLED=false"}
 
-        logger.info("STATE_SAVE: marking used assets")
+        logger.info("STATE_SAVE: marking used track; clearing used_clips after publish")
         store.mark_track_used(track_path)
-        store.mark_clips_used([c.source_url for c in clips])
+        deleted_clips = store.clear_used_clips()
+        if deleted_clips:
+            logger.info("STATE_SAVE: cleared %d used_clips rows", deleted_clips)
         report_payload["clips"] = [
             {
                 "source_video_id": c.source_video_id,
