@@ -6,9 +6,17 @@ from typing import Any
 from .config import AppConfig, resolve_youtube_refresh_token
 from .youtube_oauth_store import get_stored_refresh_token
 
-# Must match scopes used when the refresh token was issued (see youtube_oauth_web.py).
-# Requesting extra scopes on refresh causes Google invalid_scope.
+# A refresh grant may only ask for scopes the token actually carries; extras cause Google
+# invalid_scope. OAuth start requests upload + readonly (see youtube_oauth_web.py), but tokens
+# issued before that carry upload only — and asking for upload alone downscopes the access
+# token, which makes channels.list(mine=true) fail with insufficientPermissions. So try both
+# scopes first and fall back to upload-only for legacy tokens.
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+_REFRESH_SCOPE_ATTEMPTS = (
+    [YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE],
+    [YOUTUBE_UPLOAD_SCOPE],
+)
 
 
 @dataclass
@@ -38,18 +46,27 @@ def _fetch_mine_channel(
     except ImportError as exc:
         return False, f"missing google deps: {exc}", {}
 
-    creds = Credentials(
-        token=None,
-        refresh_token=refresh_token.strip(),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=client_id,
-        client_secret=client_secret,
-        scopes=[YOUTUBE_UPLOAD_SCOPE],
-    )
-    try:
-        creds.refresh(Request())
-    except Exception as exc:  # noqa: BLE001
-        return False, str(exc), {}
+    creds = None
+    last_error: Exception | None = None
+    for scopes in _REFRESH_SCOPE_ATTEMPTS:
+        candidate = Credentials(
+            token=None,
+            refresh_token=refresh_token.strip(),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=list(scopes),
+        )
+        try:
+            candidate.refresh(Request())
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+        creds = candidate
+        break
+
+    if creds is None:
+        return False, str(last_error), {}
 
     if not creds.token:
         return False, "refresh succeeded but access token is empty", {}
