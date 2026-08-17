@@ -103,84 +103,158 @@ def test_parse_handles_missing_key() -> None:
     assert _parse({}, HOUR_MS, min_ms=20_000, max_ms=60_000) == []
 
 
-def _mock_response(mocker, *, stop_reason="end_turn", text="{}"):
-    block = mocker.Mock(type="text")
-    block.text = text
-    return mocker.Mock(stop_reason=stop_reason, content=[block])
+def _mock_response(mocker, *, status=200, body=None, content='{"highlights": []}',
+                   finish_reason="stop", refusal=None):
+    if body is None:
+        message = {"content": content}
+        if refusal:
+            message["refusal"] = refusal
+        body = {"choices": [{"message": message, "finish_reason": finish_reason}]}
+    resp = mocker.Mock(status_code=status, text="")
+    resp.json.return_value = body
+    return resp
 
 
-def _patch_client(mocker, response):
-    client = mocker.Mock()
-    client.beta.messages.create.return_value = response
-    mocker.patch("src.highlights.anthropic.Anthropic", return_value=client)
-    return client
+def _patch_post(mocker, response):
+    return mocker.patch("src.highlights.requests.post", return_value=response)
 
 
 def test_find_highlights_returns_empty_without_segments(mocker) -> None:
-    create = mocker.patch("src.highlights.anthropic.Anthropic")
+    post = mocker.patch("src.highlights.requests.post")
 
-    assert find_highlights([], HOUR_MS) == []
-    create.assert_not_called()
+    assert find_highlights([], HOUR_MS, "key") == []
+    post.assert_not_called()
 
 
-def test_find_highlights_uses_opus_5(mocker) -> None:
-    client = _patch_client(mocker, _mock_response(mocker, text='{"highlights": []}'))
+def test_find_highlights_requires_a_key(mocker) -> None:
+    mocker.patch.dict("os.environ", {"OPENROUTER_API_KEY": ""}, clear=False)
 
-    find_highlights(_segments(), HOUR_MS)
+    with pytest.raises(HighlightError, match="OPENROUTER_API_KEY"):
+        find_highlights(_segments(), HOUR_MS, "")
 
-    assert client.beta.messages.create.call_args.kwargs["model"] == "claude-opus-5"
+
+def test_find_highlights_uses_configured_default(mocker) -> None:
+    mocker.patch.dict("os.environ", {"OPENROUTER_MODEL": ""}, clear=False)
+    post = _patch_post(mocker, _mock_response(mocker))
+
+    find_highlights(_segments(), HOUR_MS, "key")
+
+    assert post.call_args.kwargs["json"]["model"] == "anthropic/claude-haiku-4.5"
+
+
+def test_model_can_be_swapped_by_env(mocker) -> None:
+    # Сравнивать модели на своём контенте надо без передеплоя.
+    mocker.patch.dict("os.environ", {"OPENROUTER_MODEL": "openai/gpt-oss-20b:free"}, clear=False)
+    post = _patch_post(mocker, _mock_response(mocker))
+
+    find_highlights(_segments(), HOUR_MS, "key")
+
+    assert post.call_args.kwargs["json"]["model"] == "openai/gpt-oss-20b:free"
+
+
+def test_explicit_model_wins_over_env(mocker) -> None:
+    mocker.patch.dict("os.environ", {"OPENROUTER_MODEL": "from/env"}, clear=False)
+    post = _patch_post(mocker, _mock_response(mocker))
+
+    find_highlights(_segments(), HOUR_MS, "key", model="explicit/model")
+
+    assert post.call_args.kwargs["json"]["model"] == "explicit/model"
+
+
+def test_fallback_list_never_repeats_primary(mocker) -> None:
+    # Дубль в списке — потраченная впустую повторная попытка на той же модели.
+    mocker.patch.dict(
+        "os.environ",
+        {"OPENROUTER_MODEL": "a/b", "OPENROUTER_FALLBACK_MODELS": "a/b, c/d"},
+        clear=False,
+    )
+    post = _patch_post(mocker, _mock_response(mocker))
+
+    find_highlights(_segments(), HOUR_MS, "key")
+
+    assert post.call_args.kwargs["json"]["models"] == ["a/b", "c/d"]
 
 
 def test_find_highlights_requests_structured_output(mocker) -> None:
-    client = _patch_client(mocker, _mock_response(mocker, text='{"highlights": []}'))
+    post = _patch_post(mocker, _mock_response(mocker))
 
-    find_highlights(_segments(), HOUR_MS)
+    find_highlights(_segments(), HOUR_MS, "key")
 
-    output_config = client.beta.messages.create.call_args.kwargs["output_config"]
-    assert output_config["format"]["type"] == "json_schema"
-
-
-def test_find_highlights_declares_server_side_fallback(mocker) -> None:
-    # Резерв: отказ классификатора должен переигрываться на другой модели
-    # сервером, а не ронять конвейер.
-    client = _patch_client(mocker, _mock_response(mocker, text='{"highlights": []}'))
-
-    find_highlights(_segments(), HOUR_MS)
-
-    kwargs = client.beta.messages.create.call_args.kwargs
-    assert kwargs["fallbacks"] == "default"
-    assert "server-side-fallback-2026-07-01" in kwargs["betas"]
+    body = post.call_args.kwargs["json"]
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["strict"] is True
 
 
-def test_find_highlights_raises_when_whole_chain_refuses(mocker) -> None:
-    # Сюда попадаем, только если отказал и резерв: content пустой,
-    # читать его по индексу нельзя.
-    _patch_client(mocker, _mock_response(mocker, stop_reason="refusal", text=""))
+def test_find_highlights_pins_routing_to_capable_endpoints(mocker) -> None:
+    # Без require_parameters запрос мог бы уехать туда, где схемы нет,
+    # и вместо гарантированного JSON вернулся бы свободный текст.
+    post = _patch_post(mocker, _mock_response(mocker))
 
-    with pytest.raises(HighlightError, match="резервной"):
-        find_highlights(_segments(), HOUR_MS)
+    find_highlights(_segments(), HOUR_MS, "key")
+
+    assert post.call_args.kwargs["json"]["provider"]["require_parameters"] is True
+
+
+def test_find_highlights_declares_fallback_models(mocker) -> None:
+    post = _patch_post(mocker, _mock_response(mocker))
+
+    find_highlights(_segments(), HOUR_MS, "key")
+
+    models = post.call_args.kwargs["json"]["models"]
+    assert models[0] == "anthropic/claude-haiku-4.5"
+    assert len(models) > 1
+
+
+def test_find_highlights_sends_bearer_auth(mocker) -> None:
+    post = _patch_post(mocker, _mock_response(mocker))
+
+    find_highlights(_segments(), HOUR_MS, "secret-key")
+
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer secret-key"
+
+
+def test_find_highlights_raises_on_http_error(mocker) -> None:
+    _patch_post(mocker, _mock_response(mocker, status=402))
+
+    with pytest.raises(HighlightError, match="OpenRouter 402"):
+        find_highlights(_segments(), HOUR_MS, "key")
+
+
+def test_find_highlights_raises_on_refusal(mocker) -> None:
+    # Отказ приходит отдельным полем — читать content в этом случае незачем.
+    _patch_post(mocker, _mock_response(mocker, refusal="нельзя", content=""))
+
+    with pytest.raises(HighlightError, match="отклонила"):
+        find_highlights(_segments(), HOUR_MS, "key")
 
 
 def test_find_highlights_raises_on_truncated_response(mocker) -> None:
-    _patch_client(mocker, _mock_response(mocker, stop_reason="max_tokens", text='{"high'))
+    _patch_post(mocker, _mock_response(mocker, content='{"high', finish_reason="length"))
 
     with pytest.raises(HighlightError, match="обрезан"):
-        find_highlights(_segments(), HOUR_MS)
+        find_highlights(_segments(), HOUR_MS, "key")
 
 
 def test_find_highlights_raises_on_invalid_json(mocker) -> None:
-    _patch_client(mocker, _mock_response(mocker, text="не json"))
+    _patch_post(mocker, _mock_response(mocker, content="не json"))
 
     with pytest.raises(HighlightError, match="невалидный JSON"):
-        find_highlights(_segments(), HOUR_MS)
+        find_highlights(_segments(), HOUR_MS, "key")
+
+
+def test_find_highlights_raises_when_no_choices(mocker) -> None:
+    _patch_post(mocker, _mock_response(mocker, body={"choices": []}))
+
+    with pytest.raises(HighlightError, match="ни одного варианта"):
+        find_highlights(_segments(), HOUR_MS, "key")
 
 
 def test_find_highlights_caps_result_count(mocker) -> None:
+    import json as _json
+
     windows = [(i * 70_000, i * 70_000 + 30_000, 0.9 - i / 100) for i in range(8)]
-    import json
+    _patch_post(mocker, _mock_response(mocker, content=_json.dumps(_payload(*windows))))
 
-    _patch_client(mocker, _mock_response(mocker, text=json.dumps(_payload(*windows))))
-
-    found = find_highlights(_segments(), HOUR_MS, max_count=3)
+    found = find_highlights(_segments(), HOUR_MS, "key", max_count=3)
 
     assert len(found) == 3

@@ -1,4 +1,4 @@
-"""Проверка живых внешних API — Telegram и Claude.
+"""Проверка живых внешних API — Telegram и OpenRouter.
 
 Запускается внутри контейнера, где ключи уже лежат в окружении: значения
 секретов никуда не выводятся, наружу идут только имя бота и результат отбора.
@@ -74,9 +74,9 @@ def check_telegram() -> bool:
     return True
 
 
-def check_claude() -> bool:
-    if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-        print("  ПРОВАЛ ANTHROPIC_API_KEY не задан")
+def check_router() -> bool:
+    if not os.getenv("OPENROUTER_API_KEY", "").strip():
+        print("  ПРОВАЛ OPENROUTER_API_KEY не задан")
         return False
     try:
         found = find_highlights(
@@ -87,14 +87,14 @@ def check_claude() -> bool:
             max_seconds=45,
         )
     except Exception as exc:  # noqa: BLE001 — здесь важен сам факт сбоя
-        print(f"  ПРОВАЛ вызов Claude не прошёл: {exc}")
+        print(f"  ПРОВАЛ вызов модели не прошёл: {exc}")
         return False
 
     if not found:
-        print("  ПРОВАЛ Claude ответил, но не выбрал ни одного фрагмента")
+        print("  ПРОВАЛ модель ответила, но не выбрала ни одного фрагмента")
         return False
 
-    print(f"  OK   Claude вернул {len(found)} фрагмент(ов):")
+    print(f"  OK   модель вернула {len(found)} фрагмент(ов):")
     for h in found:
         print(f"         [{h.start_ms}-{h.end_ms}] score={h.score:.2f} «{h.title}»")
         print(f"           {h.reason}")
@@ -109,10 +109,10 @@ def check_claude() -> bool:
 def main() -> int:
     print("Telegram:")
     telegram_ok = check_telegram()
-    print("\nClaude:")
-    claude_ok = check_claude()
+    print("\nOpenRouter:")
+    router_ok = check_router()
 
-    if telegram_ok and claude_ok:
+    if telegram_ok and router_ok:
         print("\nобе проверки прошли")
         return 0
     print("\nесть провалы")

@@ -9,29 +9,61 @@
 
 Ответ приходит через structured outputs, то есть валидность JSON гарантирует
 API — парсить свободный текст и городить retry-циклы не требуется.
+
+Ходим через OpenRouter: один ключ и один баланс на все внешние модели, без
+отдельного биллинга и без протухающих OAuth-токенов. Opus 5 стоит там столько
+же, сколько напрямую, так что на качестве отбора это не экономия и не потеря.
+Цена — ещё один обработчик данных на пути клиентских транскриптов; это
+осознанный выбор, а не недосмотр.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 
-import anthropic
+import requests
 
 from .transcribe import TranscriptSegment
 
-MODEL = "claude-opus-5"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# На Opus 5 мышление включено по умолчанию, а max_tokens ограничивает мышление
-# и ответ вместе. Запас нужен, иначе ответ обрежется на середине JSON.
+# Модель вынесена в окружение, чтобы сравнивать варианты на своём контенте без
+# передеплоя: OPENROUTER_MODEL переключает её одной командой.
+#
+# Цена за одно двухчасовое видео (транскрипт ~21K токенов на вход):
+#   бесплатные модели        $0
+#   anthropic/claude-haiku-4.5    $0.031   <- выбрано
+#   anthropic/claude-sonnet-4.6   $0.093
+#   anthropic/claude-opus-5       $0.155
+#
+# Задача здесь не извлечение фактов, а суждение о том, какой момент зацепит
+# зрителя, и на таком слабые модели проваливаются заметнее всего. Насколько
+# именно — проверяется на первом же настоящем видео; если отбор начнёт
+# попадать в приветствия вместо содержания, поднимать модель до sonnet или opus.
+DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
+
+# Резерв: OpenRouter пробует модели по порядку, если предыдущая недоступна
+# или отклонила запрос. Заменяет серверный fallbacks, которого тут нет.
+DEFAULT_FALLBACKS = ["anthropic/claude-sonnet-4.6"]
+
+
+def _model_from_env() -> str:
+    return os.getenv("OPENROUTER_MODEL", "").strip() or DEFAULT_MODEL
+
+
+def _fallbacks_from_env() -> list[str]:
+    raw = os.getenv("OPENROUTER_FALLBACK_MODELS", "").strip()
+    if not raw:
+        return list(DEFAULT_FALLBACKS)
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+# Мышление у Opus 5 включено по умолчанию и делит лимит с ответом.
+# Запас нужен, иначе ответ обрежется на середине JSON.
 MAX_TOKENS = 16000
 
-# Серверный резерв: если классификаторы Opus 5 отклонят запрос, API сам
-# переигрывает его на другой модели в рамках того же вызова. Без этого отказ
-# останавливал бы конвейер там, где он способен восстановиться сам.
-# "default" — маршрутизация по категории отказа, чтобы не поддерживать
-# список моделей руками.
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
+REQUEST_TIMEOUT = 300
 
 DEFAULT_MIN_SECONDS = 20
 DEFAULT_MAX_SECONDS = 60
@@ -168,18 +200,23 @@ def find_highlights(
     max_count: int = DEFAULT_MAX_COUNT,
     min_seconds: int = DEFAULT_MIN_SECONDS,
     max_seconds: int = DEFAULT_MAX_SECONDS,
-    model: str = MODEL,
+    model: str = "",
     effort: str = "high",
 ) -> list[Highlight]:
     """Возвращает непересекающиеся окна по убыванию скора, не длиннее ``max_count``.
 
-    ``api_key`` можно не передавать — SDK сам возьмёт ANTHROPIC_API_KEY из окружения.
+    ``api_key`` и ``model`` можно не передавать: подхватятся ``OPENROUTER_API_KEY``
+    и ``OPENROUTER_MODEL`` из окружения.
     """
     if not segments:
         return []
 
+    key = api_key.strip() or os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        raise HighlightError("OPENROUTER_API_KEY не задан")
+
+    model = model.strip() or _model_from_env()
     min_ms, max_ms = min_seconds * 1000, max_seconds * 1000
-    client = anthropic.Anthropic(api_key=api_key) if api_key.strip() else anthropic.Anthropic()
 
     instruction = (
         f"Ниже транскрипт видео длительностью {source_duration_ms // 1000} секунд. "
@@ -189,38 +226,69 @@ def find_highlights(
         f"{render_transcript(segments)}"
     )
 
-    try:
-        response = client.beta.messages.create(
-            model=model,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            betas=[FALLBACK_BETA],
-            fallbacks="default",
-            output_config={
-                "effort": effort,
-                "format": {"type": "json_schema", "schema": _SCHEMA},
-            },
-            messages=[{"role": "user", "content": instruction}],
-        )
-    except anthropic.APIStatusError as exc:
-        raise HighlightError(f"Claude API {exc.status_code}: {exc.message}") from exc
-    except anthropic.APIConnectionError as exc:
-        raise HighlightError("Не удалось соединиться с Claude API") from exc
+    body = {
+        "model": model,
+        # OpenRouter пойдёт по списку дальше, если модель недоступна или
+        # отклонила запрос.
+        "models": [model, *(m for m in _fallbacks_from_env() if m != model)],
+        "max_tokens": MAX_TOKENS,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": instruction},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "highlights", "strict": True, "schema": _SCHEMA},
+        },
+        # Без этого запрос мог бы уехать на эндпоинт, который схему не
+        # поддерживает, и вместо гарантированного JSON вернулся бы свободный
+        # текст — ровно то, ради ухода от чего эта схема и заведена.
+        "provider": {"require_parameters": True},
+        "reasoning": {"effort": effort},
+    }
 
-    # Сюда попадаем, только если отказала вся цепочка вместе с резервом —
-    # тогда content пустой или обрезанный, и читать его по индексу нельзя.
-    if response.stop_reason == "refusal":
-        raise HighlightError("Отбор хайлайтов отклонён и основной моделью, и резервной")
-    if response.stop_reason == "max_tokens":
+    try:
+        response = requests.post(
+            OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise HighlightError(f"Не удалось соединиться с OpenRouter: {exc}") from exc
+
+    if response.status_code != 200:
+        raise HighlightError(f"OpenRouter {response.status_code}: {response.text[:300]}")
+
+    try:
+        payload = response.json()
+    except json.JSONDecodeError as exc:
+        raise HighlightError("OpenRouter вернул не-JSON") from exc
+
+    if payload.get("error"):
+        raise HighlightError(f"OpenRouter: {payload['error']}")
+
+    choices = payload.get("choices") or []
+    if not choices:
+        raise HighlightError("OpenRouter не вернул ни одного варианта ответа")
+
+    choice = choices[0]
+    message = choice.get("message") or {}
+
+    # Отказ модели приходит отдельным полем, а не текстом — читать content
+    # в этом случае бессмысленно.
+    if message.get("refusal"):
+        raise HighlightError(f"Модель отклонила запрос: {message['refusal']}")
+    if choice.get("finish_reason") == "length":
         raise HighlightError("Ответ обрезан по max_tokens — JSON неполный")
 
-    text = next((b.text for b in response.content if b.type == "text"), "")
-    if not text.strip():
-        raise HighlightError("Claude вернул пустой ответ")
+    text = (message.get("content") or "").strip()
+    if not text:
+        raise HighlightError("Модель вернула пустой ответ")
 
     try:
-        payload = json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise HighlightError("Claude вернул невалидный JSON") from exc
+        raise HighlightError("Модель вернула невалидный JSON") from exc
 
-    return _parse(payload, source_duration_ms, min_ms, max_ms)[:max_count]
+    return _parse(parsed, source_duration_ms, min_ms, max_ms)[:max_count]
