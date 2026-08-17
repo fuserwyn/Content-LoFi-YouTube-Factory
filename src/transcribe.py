@@ -1,35 +1,50 @@
-"""Транскрибация исходника через Whisper API с пословными таймкодами.
+"""Транскрибация исходника локальным Whisper, с пословными таймкодами.
 
-Пословные тайминги нужны, чтобы субтитры в шортсе шли короткими строками в такт
-речи, а не висели абзацем на весь клип.
+Пословные тайминги нужны дважды: сопоставить отобранный хайлайт с местом в
+видео и синхронизировать субтитры с речью. Поэтому LLM с аудио на входе здесь
+не годится — текст она выдаст, а миллисекунды выдумает.
 
-У API жёсткий лимит 25 МБ на файл, поэтому дорожка сначала вынимается из видео и
-жмётся в opus 16 кбит/с моно: два часа ≈ 14 МБ и влезают целиком. Если исходник
-длиннее, файл режется на куски, а таймкоды сдвигаются обратно в абсолютные.
+Считаем на CPU через faster-whisper (CTranslate2): ключей и счетов не нужно,
+платим только временем. Времени уходит много — замер на 116 секундах русской
+речи, int8, Apple Silicon:
+
+    tiny    x1.6 реального времени  ->  2 часа звука за ~73 минуты
+    small   x0.3 реального времени  ->  2 часа звука за ~6 часов
+
+На процессоре Railway — медленнее. Практический вывод: локальный бэкенд годится
+для отладки и коротких исходников, но длинный подкаст на нём обрабатывать
+нельзя, юзер столько не ждёт. Под лонги нужен API (Cloudflare Workers AI —
+$0.00051 за минуту, то есть шесть центов за двухчасовое видео).
+
+Качество тоже разное: на том же файле ``small`` распознал 232 слова против 186
+у ``tiny``. Транскрипт — вход для отбора хайлайтов, так что его пробелы прямо
+портят главную функцию продукта.
+
+Веса модели скачиваются при первом запуске. На Railway их стоит держать на
+волюме (``download_root``), иначе каждый передеплой качает заново.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-import json
-import math
 import subprocess
 import tempfile
-
-import requests
+import threading
 
 from .ffmpeg_utils import finalize_ffmpeg_command
 
-WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions"
-WHISPER_MODEL = "whisper-1"
+DEFAULT_MODEL_SIZE = "small"
+# int8 примерно вчетверо быстрее float32 на CPU при незначительной потере
+# качества — для CPU-инференса это единственный практичный режим.
+DEFAULT_COMPUTE_TYPE = "int8"
 
-# Хард-лимит Whisper API. Держим запас — multipart добавляет накладные.
-MAX_UPLOAD_BYTES = 24 * 1024 * 1024
-
-# 16 кбит/с моно хватает для распознавания речи и даёт ~7 МБ на час.
-AUDIO_BITRATE = "16k"
+# 16 кГц моно — то, что Whisper ждёт на входе; больше ему не нужно.
 AUDIO_SAMPLE_RATE = "16000"
+
+# Загрузка весов занимает секунды и память, а модель между вызовами не меняется.
+_MODEL_CACHE: dict[tuple, object] = {}
+_MODEL_LOCK = threading.Lock()
 
 
 @dataclass
@@ -68,7 +83,11 @@ def probe_duration_seconds(path: Path) -> float:
 
 
 def extract_audio(source_path: Path, output_path: Path) -> Path:
-    """Вынимает дорожку в opus моно 16 кГц — минимальный размер без потери разборчивости."""
+    """Вынимает дорожку в 16 кГц моно WAV — формат, который Whisper ждёт.
+
+    Декодировать видеопоток на каждом проходе распознавания незачем, поэтому
+    звук вынимается один раз заранее.
+    """
     if not source_path.exists():
         raise TranscriptionError(f"Source not found: {source_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,8 +97,7 @@ def extract_audio(source_path: Path, output_path: Path) -> Path:
         "-vn",
         "-ac", "1",
         "-ar", AUDIO_SAMPLE_RATE,
-        "-c:a", "libopus",
-        "-b:a", AUDIO_BITRATE,
+        "-c:a", "pcm_s16le",
         str(output_path),
     ]
     proc = subprocess.run(finalize_ffmpeg_command(cmd), check=False, capture_output=True, text=True)
@@ -88,120 +106,90 @@ def extract_audio(source_path: Path, output_path: Path) -> Path:
     return output_path
 
 
-def _slice_audio(source_path: Path, output_path: Path, start_s: float, duration_s: float) -> Path:
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{start_s:.3f}",
-        "-t", f"{duration_s:.3f}",
-        "-i", str(source_path),
-        "-c", "copy",
-        str(output_path),
-    ]
-    proc = subprocess.run(finalize_ffmpeg_command(cmd), check=False, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise TranscriptionError(f"Audio slicing failed: {proc.stderr.strip()[:500]}")
-    return output_path
+def load_model(
+    model_size: str = DEFAULT_MODEL_SIZE,
+    *,
+    device: str = "cpu",
+    compute_type: str = DEFAULT_COMPUTE_TYPE,
+    download_root: str = "",
+):
+    """Возвращает модель из кеша, загружая её при первом обращении."""
+    key = (model_size, device, compute_type, download_root)
+    with _MODEL_LOCK:
+        if key not in _MODEL_CACHE:
+            try:
+                from faster_whisper import WhisperModel
+            except ImportError as exc:  # pragma: no cover
+                raise TranscriptionError(
+                    "faster-whisper is required for local transcription"
+                ) from exc
+            _MODEL_CACHE[key] = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+                download_root=download_root or None,
+            )
+        return _MODEL_CACHE[key]
 
 
-def _chunk_plan(duration_s: float, size_bytes: int) -> list[tuple[float, float]]:
-    """(start, duration) кусков так, чтобы каждый влезал в лимит API."""
-    if size_bytes <= MAX_UPLOAD_BYTES:
-        return [(0.0, duration_s)]
-    parts = math.ceil(size_bytes / MAX_UPLOAD_BYTES)
-    step = duration_s / parts
-    return [(i * step, step) for i in range(parts)]
-
-
-def _call_whisper(audio_path: Path, api_key: str, language: str = "") -> dict:
-    data = [
-        ("model", WHISPER_MODEL),
-        ("response_format", "verbose_json"),
-        ("timestamp_granularities[]", "word"),
-        ("timestamp_granularities[]", "segment"),
-    ]
-    if language.strip():
-        data.append(("language", language.strip()))
-
-    with audio_path.open("rb") as handle:
-        response = requests.post(
-            WHISPER_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            data=data,
-            files={"file": (audio_path.name, handle, "audio/ogg")},
-            timeout=600,
-        )
-    if response.status_code != 200:
-        raise TranscriptionError(
-            f"Whisper API {response.status_code}: {response.text[:300]}"
-        )
-    try:
-        return response.json()
-    except json.JSONDecodeError as exc:
-        raise TranscriptionError("Whisper API returned non-JSON response") from exc
-
-
-def _parse_response(payload: dict, offset_ms: int) -> list[TranscriptSegment]:
-    words = [
-        Word(
-            start_ms=int(float(w.get("start", 0)) * 1000) + offset_ms,
-            end_ms=int(float(w.get("end", 0)) * 1000) + offset_ms,
-            text=str(w.get("word", "")).strip(),
-        )
-        for w in payload.get("words") or []
-        if str(w.get("word", "")).strip()
-    ]
-
+def _to_segments(raw_segments) -> list[TranscriptSegment]:
     segments: list[TranscriptSegment] = []
-    for raw in payload.get("segments") or []:
-        start_ms = int(float(raw.get("start", 0)) * 1000) + offset_ms
-        end_ms = int(float(raw.get("end", 0)) * 1000) + offset_ms
-        text = str(raw.get("text", "")).strip()
+    for raw in raw_segments:
+        text = (raw.text or "").strip()
         if not text:
             continue
-        segments.append(
-            TranscriptSegment(
-                start_ms=start_ms,
-                end_ms=end_ms,
-                text=text,
-                words=[w for w in words if start_ms <= w.start_ms < end_ms],
+        words = [
+            Word(
+                start_ms=int(w.start * 1000),
+                end_ms=int(w.end * 1000),
+                text=(w.word or "").strip(),
             )
-        )
-
-    # Гранулярность segment иногда не приходит — тогда собираем из слов,
-    # чтобы вызывающий код всегда получал непустой результат.
-    if not segments and words:
+            for w in (raw.words or [])
+            if (w.word or "").strip()
+        ]
         segments.append(
             TranscriptSegment(
-                start_ms=words[0].start_ms,
-                end_ms=words[-1].end_ms,
-                text=" ".join(w.text for w in words),
+                start_ms=int(raw.start * 1000),
+                end_ms=int(raw.end * 1000),
+                text=text,
                 words=words,
             )
         )
     return segments
 
 
-def transcribe(source_path: Path, api_key: str, language: str = "") -> list[TranscriptSegment]:
+def transcribe(
+    source_path: Path,
+    *,
+    model_size: str = DEFAULT_MODEL_SIZE,
+    language: str = "",
+    device: str = "cpu",
+    compute_type: str = DEFAULT_COMPUTE_TYPE,
+    download_root: str = "",
+) -> list[TranscriptSegment]:
     """Транскрибирует видео или аудио. Возвращает сегменты в абсолютных мс от начала."""
-    if not api_key.strip():
-        raise TranscriptionError("Whisper API key is empty")
+    model = load_model(
+        model_size,
+        device=device,
+        compute_type=compute_type,
+        download_root=download_root,
+    )
 
     with tempfile.TemporaryDirectory(prefix="transcribe_") as tmp:
-        tmp_dir = Path(tmp)
-        audio_path = extract_audio(source_path, tmp_dir / "audio.ogg")
-        size_bytes = audio_path.stat().st_size
-        duration_s = probe_duration_seconds(audio_path)
-
-        segments: list[TranscriptSegment] = []
-        for index, (start_s, chunk_s) in enumerate(_chunk_plan(duration_s, size_bytes)):
-            if index == 0 and size_bytes <= MAX_UPLOAD_BYTES:
-                chunk_path = audio_path
-            else:
-                chunk_path = _slice_audio(
-                    audio_path, tmp_dir / f"chunk_{index}.ogg", start_s, chunk_s
-                )
-            payload = _call_whisper(chunk_path, api_key, language)
-            segments.extend(_parse_response(payload, offset_ms=int(start_s * 1000)))
+        audio_path = extract_audio(source_path, Path(tmp) / "audio.wav")
+        try:
+            raw_segments, _info = model.transcribe(
+                str(audio_path),
+                language=language.strip() or None,
+                word_timestamps=True,
+            )
+            # faster-whisper отдаёт генератор и считает лениво — материализуем
+            # до выхода из TemporaryDirectory, иначе файл исчезнет из-под него.
+            segments = _to_segments(raw_segments)
+        except TranscriptionError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — бэкенд бросает свои типы
+            raise TranscriptionError(f"Whisper failed: {exc}") from exc
 
     segments.sort(key=lambda s: s.start_ms)
     return segments
