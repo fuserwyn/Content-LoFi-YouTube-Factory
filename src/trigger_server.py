@@ -1469,6 +1469,11 @@ def start_trigger_server(config: AppConfig) -> None:
 
         if attach_webhook(app):
             logger.info("TRIGGER: telegram webhook mounted at %s", WEBHOOK_PATH)
+
+        from .upload_page import attach_upload_page
+
+        if attach_upload_page(app):
+            logger.info("TRIGGER: upload page mounted")
     except Exception as exc:  # noqa: BLE001
         # Сломанный бот не должен уносить с собой лофи-конвейер.
         logger.warning("TRIGGER: telegram webhook not mounted: %s", exc)

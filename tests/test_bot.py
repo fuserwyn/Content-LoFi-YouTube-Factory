@@ -184,3 +184,18 @@ def test_webhook_rejects_missing_secret_header(mocker) -> None:
 
     assert response.status_code == 403
     dispatcher.feed_update.assert_not_called()
+
+
+def test_upload_token_is_the_random_key_segment() -> None:
+    from src.bot import upload_key, upload_token
+
+    key = upload_key(_cfg(), 42, "video.mp4")
+
+    assert upload_token(key) == key.split("/")[2]
+    assert len(upload_token(key)) == 32
+
+
+def test_upload_token_survives_malformed_key() -> None:
+    from src.bot import upload_token
+
+    assert upload_token("broken") == ""

@@ -73,7 +73,16 @@ def load_bot_config() -> BotConfig:
         # Пустой секрет означает, что вебхук никем не подписан — тогда
         # принимать апдейты небезопасно, см. verify_secret.
         webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),
-        public_base_url=os.getenv("YOUTUBE_OAUTH_PUBLIC_BASE_URL", "").strip().rstrip("/"),
+        # RAILWAY_PUBLIC_DOMAIN Railway подставляет сам — это и есть адрес,
+        # по которому юзер откроет страницу загрузки.
+        public_base_url=(
+            os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+            or (
+                f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', '').strip()}"
+                if os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+                else ""
+            )
+        ),
         admin_chat_id=os.getenv("ADMIN_CHAT_ID", "").strip(),
         s3=S3SyncConfig(
             enabled=True,
@@ -113,6 +122,13 @@ def upload_key(cfg: BotConfig, user_id: int, filename: str) -> str:
         kept = kept.replace("..", ".")
     safe = kept.strip("._-")[-64:] or "video.mp4"
     return f"{cfg.upload_prefix}/{user_id}/{uuid.uuid4().hex}/{safe}"
+
+
+def upload_token(key: str) -> str:
+    """Случайный сегмент ключа. Он же токен страницы загрузки — отдельную
+    колонку заводить не нужно, а угадать чужую загрузку нельзя."""
+    parts = key.split("/")
+    return parts[2] if len(parts) > 2 else ""
 
 
 def presigned_upload_url(cfg: BotConfig, key: str) -> str:
@@ -228,27 +244,28 @@ def build_dispatcher(cfg: BotConfig):
             await message.answer("Аккаунт приостановлен. Напиши в поддержку.")
             return
 
-        key = upload_key(cfg, user_id, "video.mp4")
-        try:
-            url = await asyncio.to_thread(presigned_upload_url, cfg, key)
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("presigned url failed")
-            await message.answer(f"Не смог выдать ссылку для загрузки: {exc}")
+        if not cfg.public_base_url:
+            await message.answer("Сервис не знает своего публичного адреса — напиши в поддержку.")
             return
 
+        key = upload_key(cfg, user_id, "video.mp4")
         source_id = await in_db(lambda db: db.create_source(user_id, key))
+
+        # Даём адрес страницы, а не presigned-ссылку: она подписана под PUT,
+        # и по клику браузер получил бы ошибку подписи вместо формы.
+        page_url = f"{cfg.public_base_url}/upload/{upload_token(key)}"
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[
+                InlineKeyboardButton(text="Открыть загрузку", url=page_url)
+            ], [
                 InlineKeyboardButton(
                     text="Это мой контент", callback_data=f"rights:{source_id}"
                 )
             ]]
         )
         await message.answer(
-            "Ссылка для загрузки (действует 6 часов):\n\n"
-            f"`{url}`\n\n"
-            "Загрузи файл методом PUT по этой ссылке, потом нажми кнопку ниже.",
-            parse_mode="Markdown",
+            "Открой страницу загрузки и выбери видео. Когда закончится — "
+            "вернись сюда и подтверди права на контент.",
             reply_markup=keyboard,
         )
 
