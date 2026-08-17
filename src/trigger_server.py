@@ -1473,6 +1473,16 @@ def start_trigger_server(config: AppConfig) -> None:
         # Сломанный бот не должен уносить с собой лофи-конвейер.
         logger.warning("TRIGGER: telegram webhook not mounted: %s", exc)
 
+    # Воркер шортсов — фоновым потоком в этом же процессе. Рендер идёт через
+    # nice и уступает процессор uvicorn, поэтому бот продолжает отвечать.
+    try:
+        from .worker import start_background_worker
+
+        if start_background_worker():
+            logger.info("TRIGGER: shorts worker started")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TRIGGER: shorts worker not started: %s", exc)
+
     logger.info("TRIGGER: server started on 0.0.0.0:8080")
     uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
 
