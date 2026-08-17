@@ -284,11 +284,19 @@ def find_highlights(
 
     text = (message.get("content") or "").strip()
     if not text:
-        raise HighlightError("Модель вернула пустой ответ")
+        raise HighlightError(
+            f"Модель вернула пустой ответ (finish_reason={choice.get('finish_reason')}, "
+            f"модель={payload.get('model')})"
+        )
 
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise HighlightError("Модель вернула невалидный JSON") from exc
+        # Показываем начало ответа: со structured outputs такого быть не должно,
+        # и без образца непонятно, кто именно нарушил контракт — модель,
+        # роутер или наш собственный запрос.
+        raise HighlightError(
+            f"Модель {payload.get('model')} вернула невалидный JSON: {text[:300]!r}"
+        ) from exc
 
     return _parse(parsed, source_duration_ms, min_ms, max_ms)[:max_count]
