@@ -1,0 +1,186 @@
+import pytest
+
+from src.bot import (
+    BotConfig,
+    object_size,
+    parse_cadence,
+    presigned_upload_url,
+    upload_key,
+    verify_secret,
+)
+from src.remote_assets import S3SyncConfig
+
+
+def _cfg(**overrides) -> BotConfig:
+    base = dict(
+        token="123:abc",
+        database_url="postgresql://x",
+        webhook_secret="s3cret",
+        public_base_url="https://example.test",
+        admin_chat_id="",
+        s3=S3SyncConfig(
+            enabled=True, bucket="bucket", endpoint_url="https://r2.test",
+            region="auto", access_key_id="k", secret_access_key="s",
+            videos_prefix="source_videos", tracks_prefix="tracks",
+        ),
+    )
+    base.update(overrides)
+    return BotConfig(**base)
+
+
+def test_configured_requires_token_and_database() -> None:
+    assert _cfg().configured is True
+    assert _cfg(token="").configured is False
+    assert _cfg(database_url="").configured is False
+
+
+def test_verify_secret_accepts_matching_header() -> None:
+    assert verify_secret(_cfg(), "s3cret") is True
+
+
+def test_verify_secret_rejects_wrong_header() -> None:
+    assert verify_secret(_cfg(), "nope") is False
+
+
+def test_verify_secret_rejects_everything_when_unset() -> None:
+    # Незаданный секрет не должен превращаться в «пускать всех»: адрес вебхука
+    # угадывается, и тогда кто угодно слал бы боту команды от чужого имени.
+    cfg = _cfg(webhook_secret="")
+
+    assert verify_secret(cfg, "") is False
+    assert verify_secret(cfg, "anything") is False
+
+
+def test_upload_key_is_scoped_to_user() -> None:
+    key = upload_key(_cfg(), 42, "video.mp4")
+
+    assert key.startswith("uploads/42/")
+    assert key.endswith("video.mp4")
+
+
+def test_upload_key_is_unguessable() -> None:
+    # Предсказуемый ключ позволил бы перезаписать чужую загрузку.
+    first = upload_key(_cfg(), 42, "video.mp4")
+    second = upload_key(_cfg(), 42, "video.mp4")
+
+    assert first != second
+
+
+def test_upload_key_strips_dangerous_characters() -> None:
+    key = upload_key(_cfg(), 7, "../../etc/passwd")
+
+    assert ".." not in key.rsplit("/", 1)[1]
+
+
+def test_upload_key_falls_back_on_empty_name() -> None:
+    key = upload_key(_cfg(), 7, "///")
+
+    assert key.endswith("video.mp4")
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("24", 24),
+        ("24ч", 24),
+        ("раз в 12 часов", 12),
+        ("1", 1),
+        ("", None),
+        ("каждый день", None),
+        ("0", None),
+        ("1000", None),
+    ],
+)
+def test_parse_cadence(text, expected) -> None:
+    assert parse_cadence(text) == expected
+
+
+def test_presigned_upload_url_signs_a_put(mocker) -> None:
+    client = mocker.Mock()
+    client.generate_presigned_url.return_value = "https://signed"
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    url = presigned_upload_url(_cfg(), "uploads/1/x/video.mp4")
+
+    assert url == "https://signed"
+    assert client.generate_presigned_url.call_args[0][0] == "put_object"
+
+
+def test_object_size_returns_length(mocker) -> None:
+    client = mocker.Mock()
+    client.head_object.return_value = {"ContentLength": 4096}
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert object_size(_cfg(), "uploads/1/x/video.mp4") == 4096
+
+
+def test_object_size_is_zero_when_upload_never_landed(mocker) -> None:
+    # Иначе воркер взял бы задачу и упал на отсутствующем исходнике.
+    client = mocker.Mock()
+    client.head_object.side_effect = RuntimeError("404")
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert object_size(_cfg(), "uploads/1/x/missing.mp4") == 0
+
+
+def test_attach_webhook_skips_when_bot_not_configured() -> None:
+    # Лофи-конвейер должен работать в окружении без бота — роут не появляется.
+    from fastapi import FastAPI
+
+    from src.bot import attach_webhook
+
+    app = FastAPI()
+
+    assert attach_webhook(app, _cfg(token="")) is False
+    assert not [r for r in app.routes if getattr(r, "path", "") == "/telegram/webhook"]
+
+
+def test_attach_webhook_mounts_route(mocker) -> None:
+    from fastapi import FastAPI
+
+    from src.bot import attach_webhook
+
+    mocker.patch("src.bot.build_dispatcher", return_value=mocker.Mock())
+    app = FastAPI()
+
+    assert attach_webhook(app, _cfg()) is True
+    assert [r for r in app.routes if getattr(r, "path", "") == "/telegram/webhook"]
+
+
+def test_webhook_rejects_wrong_secret(mocker) -> None:
+    # Адрес вебхука угадывается, поэтому подпись — единственная защита.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.bot import attach_webhook
+
+    dispatcher = mocker.Mock()
+    mocker.patch("src.bot.build_dispatcher", return_value=dispatcher)
+    app = FastAPI()
+    attach_webhook(app, _cfg())
+
+    response = TestClient(app).post(
+        "/telegram/webhook",
+        json={"update_id": 1},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"},
+    )
+
+    assert response.status_code == 403
+    dispatcher.feed_update.assert_not_called()
+
+
+def test_webhook_rejects_missing_secret_header(mocker) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.bot import attach_webhook
+
+    dispatcher = mocker.Mock()
+    mocker.patch("src.bot.build_dispatcher", return_value=dispatcher)
+    app = FastAPI()
+    attach_webhook(app, _cfg())
+
+    response = TestClient(app).post("/telegram/webhook", json={"update_id": 1})
+
+    assert response.status_code == 403
+    dispatcher.feed_update.assert_not_called()

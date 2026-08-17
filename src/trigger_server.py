@@ -1462,6 +1462,17 @@ def start_trigger_server(config: AppConfig) -> None:
         finally:
             run_lock.release()
 
+    # Бот делит процесс и порт с триггер-сервером: у сервиса один публичный
+    # домен. Если он не настроен, роут не появляется и всё работает как раньше.
+    try:
+        from .bot import WEBHOOK_PATH, attach_webhook
+
+        if attach_webhook(app):
+            logger.info("TRIGGER: telegram webhook mounted at %s", WEBHOOK_PATH)
+    except Exception as exc:  # noqa: BLE001
+        # Сломанный бот не должен уносить с собой лофи-конвейер.
+        logger.warning("TRIGGER: telegram webhook not mounted: %s", exc)
+
     logger.info("TRIGGER: server started on 0.0.0.0:8080")
     uvicorn.run(app, host="0.0.0.0", port=8080, log_level="info")
 
