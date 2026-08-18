@@ -63,6 +63,10 @@ class BotConfig:
     public_base_url: str
     admin_chat_id: str
     s3: S3SyncConfig
+    # Пустой список означает открытый бот. Это осознанная конфигурация,
+    # а не отсутствие защиты: в отличие от секрета вебхука, где пустое
+    # значение значит «механизма подписи нет» и пускать нельзя никого.
+    allowed_users: frozenset[str] = frozenset()
     # Загрузки юзеров держим отдельно от ассетов лофи-конвейера: чужой
     # контент и свои треки не должны жить в одном бакете — разные права
     # доступа, разный жизненный цикл, разная ответственность при инциденте.
@@ -97,6 +101,7 @@ def load_bot_config() -> BotConfig:
         ),
         admin_chat_id=os.getenv("ADMIN_CHAT_ID", "").strip(),
         uploads_bucket=os.getenv("UPLOADS_S3_BUCKET", "").strip(),
+        allowed_users=parse_allowed_users(os.getenv("BOT_ALLOWED_USERS", "")),
         s3=S3SyncConfig(
             enabled=True,
             bucket=os.getenv("ASSETS_S3_BUCKET", "").strip(),
@@ -107,6 +112,30 @@ def load_bot_config() -> BotConfig:
             videos_prefix=os.getenv("ASSETS_S3_VIDEOS_PREFIX", "source_videos").strip(),
             tracks_prefix=os.getenv("ASSETS_S3_TRACKS_PREFIX", "tracks").strip(),
         ),
+    )
+
+
+def parse_allowed_users(raw: str) -> frozenset[str]:
+    """Разбирает список доступа: «@vasya, 12345, petya».
+
+    Принимаем и юзернеймы, и числовые id. Юзернейм читается людьми, но его
+    можно сменить, а освободившийся — занять; id стабилен. Поэтому одно
+    не заменяет другое, и хранить стоит оба.
+    """
+    return frozenset(
+        item.strip().lstrip("@").lower()
+        for item in raw.split(",")
+        if item.strip().lstrip("@")
+    )
+
+
+def is_allowed(cfg: BotConfig, user_id: int, username: str) -> bool:
+    """Пускать ли этого юзера. Пустой список — бот открыт для всех."""
+    if not cfg.allowed_users:
+        return True
+    return (
+        str(user_id) in cfg.allowed_users
+        or (username or "").lower().lstrip("@") in cfg.allowed_users
     )
 
 
@@ -335,6 +364,30 @@ def build_dispatcher(cfg: BotConfig):
     )
 
     dp = Dispatcher()
+
+    @dp.update.outer_middleware()
+    async def allowlist(handler, event, data):
+        """Отсекает посторонних до любого обработчика.
+
+        Именно middleware, а не проверка внутри команд: список хендлеров
+        растёт, и однажды в новом её просто забудут поставить.
+        """
+        who = getattr(event, "message", None) or getattr(event, "callback_query", None)
+        sender = getattr(who, "from_user", None)
+        if sender is None:
+            return await handler(event, data)
+
+        if not is_allowed(cfg, sender.id, sender.username or ""):
+            LOGGER.info(
+                "BOT: отклонён посторонний @%s (%s)", sender.username, sender.id
+            )
+            # Отвечаем, а не молчим: тишина выглядит поломкой, и человек
+            # будет писать снова.
+            if getattr(who, "answer", None):
+                await who.answer("Этот бот приватный.")
+            return None
+        return await handler(event, data)
+
 
     def store() -> TenantStore:
         return TenantStore(cfg.database_url)

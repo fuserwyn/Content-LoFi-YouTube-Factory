@@ -339,3 +339,51 @@ def test_uploads_are_scoped_to_the_user(mocker) -> None:
     list_uploads(_cfg(), 7)
 
     assert client.list_objects_v2.call_args.kwargs["Prefix"] == "uploads/7/"
+
+
+def test_allowlist_parses_usernames_and_ids() -> None:
+    from src.bot import parse_allowed_users
+
+    assert parse_allowed_users("@pimpnrave, lofitravel , 414802636") == frozenset(
+        {"pimpnrave", "lofitravel", "414802636"}
+    )
+
+
+def test_allowlist_ignores_empty_entries() -> None:
+    from src.bot import parse_allowed_users
+
+    assert parse_allowed_users(" , @, ,") == frozenset()
+
+
+def test_allowed_by_username_case_insensitively() -> None:
+    from src.bot import is_allowed, parse_allowed_users
+
+    cfg = _cfg(allowed_users=parse_allowed_users("@pimpnrave,lofitravel"))
+
+    assert is_allowed(cfg, 1, "LoFiTravel") is True
+    assert is_allowed(cfg, 1, "pimpnrave") is True
+
+
+def test_allowed_by_numeric_id_when_username_is_absent() -> None:
+    # Юзернейма может не быть вовсе, а id есть всегда.
+    from src.bot import is_allowed, parse_allowed_users
+
+    cfg = _cfg(allowed_users=parse_allowed_users("414802636"))
+
+    assert is_allowed(cfg, 414802636, "") is True
+
+
+def test_stranger_is_rejected() -> None:
+    from src.bot import is_allowed, parse_allowed_users
+
+    cfg = _cfg(allowed_users=parse_allowed_users("@pimpnrave,lofitravel"))
+
+    assert is_allowed(cfg, 999, "someone_else") is False
+
+
+def test_empty_allowlist_keeps_the_bot_open() -> None:
+    # Пустой список — осознанная конфигурация «бот публичный», а не забытая
+    # настройка: иначе выкатка без переменной заперла бы и владельцев.
+    from src.bot import is_allowed
+
+    assert is_allowed(_cfg(), 999, "anyone") is True
