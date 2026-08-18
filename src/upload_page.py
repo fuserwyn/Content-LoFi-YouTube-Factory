@@ -20,11 +20,23 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
 
 from .bot import BotConfig, load_bot_config, presigned_upload_url
+from .remote_assets import build_s3_client
 from .tenant_store import TenantStore
 
 LOGGER = logging.getLogger("content_factory")
 
 UPLOAD_PATH = "/upload/{token}"
+
+_BROKEN = """<!doctype html>
+<html lang="ru"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Загрузка недоступна</title>
+<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:0 auto;
+  padding:2rem 1.25rem}}code{{background:#8883;padding:.1em .35em;border-radius:.25em}}</style>
+<h1>Загрузка пока недоступна</h1>
+<p>{reason}</p>
+<p>Это неполадка на нашей стороне — файл тут ни при чём. Напиши в поддержку.</p>
+</html>"""
 
 _PAGE = """<!doctype html>
 <html lang="ru">
@@ -113,6 +125,29 @@ def find_storage_key(cfg: BotConfig, token: str) -> str:
     return row[0] if row else ""
 
 
+def storage_problem(cfg: BotConfig) -> str:
+    """Пустая строка, если в бакет реально можно загружать.
+
+    Проверяем и существование, и CORS: без политики браузер не отправит PUT,
+    а сообщить об этом сам он не может — для него это просто отказ сети.
+    """
+    client = build_s3_client(cfg.s3)
+    bucket = cfg.bucket_for_uploads
+    try:
+        client.head_bucket(Bucket=bucket)
+    except Exception:  # noqa: BLE001
+        return f"Хранилище «{bucket}» не найдено."
+
+    try:
+        rules = client.get_bucket_cors(Bucket=bucket).get("CORSRules") or []
+    except Exception:  # noqa: BLE001
+        return "У хранилища не настроены правила доступа из браузера (CORS)."
+
+    if not any("PUT" in (r.get("AllowedMethods") or []) for r in rules):
+        return "Правила доступа хранилища не разрешают загрузку из браузера."
+    return ""
+
+
 def attach_upload_page(app, cfg: BotConfig | None = None) -> bool:
     """Вешает страницу загрузки на приложение. False, если бот не настроен."""
     cfg = cfg or load_bot_config()
@@ -128,6 +163,16 @@ def attach_upload_page(app, cfg: BotConfig | None = None) -> bool:
         key = find_storage_key(cfg, token)
         if not key:
             raise HTTPException(status_code=404, detail="not found")
+
+        # Проверяем хранилище до того, как юзер начнёт заливать гигабайты.
+        # Браузер блокирует ответы R2 по CORS, поэтому и отсутствие бакета, и
+        # отсутствие политики выглядят на странице одинаково — как обрыв сети.
+        # Без этой проверки юзер отправляет полтора гигабайта в стену и не
+        # получает ни одной подсказки, что пошло не так.
+        broken = storage_problem(cfg)
+        if broken:
+            LOGGER.error("UPLOAD PAGE: хранилище не готово — %s", broken)
+            return HTMLResponse(_BROKEN.format(reason=broken), status_code=503)
 
         try:
             url = presigned_upload_url(cfg, key)
