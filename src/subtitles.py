@@ -171,9 +171,13 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Style: Default,{font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{max(2, size // 12)},2,2,{side},{side},{bottom},1
 
 [Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, Effect, Text
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
+    # libass rebuilds Text from everything after the (field_count - 1)-th comma
+    # in the Format line above. A Dialogue row has 10 fields (Layer..Text); if
+    # the header lists fewer, the trailing empty Effect field gets swallowed
+    # back into Text as a leading comma on every single cue.
     lines = [
         f"Dialogue: 0,{_timestamp(cue.start_ms)},{_timestamp(cue.end_ms)},Default,,0,0,0,,{_escape(cue.text)}"
         for cue in group_words(words)

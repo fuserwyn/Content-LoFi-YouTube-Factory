@@ -80,6 +80,27 @@ def test_build_ass_has_header_and_dialogue_lines() -> None:
     assert ass.count("Dialogue:") == 2
 
 
+def test_ass_format_line_field_count_matches_dialogue_line() -> None:
+    # libass rebuilds Text from everything after the (N-1)-th comma, where N
+    # is the field count declared in the Format line. If the header lists one
+    # field fewer than a Dialogue row actually has, the trailing empty field
+    # (Effect) gets swallowed back into Text as a leading comma — on every
+    # single cue, no matter what the words are. This is the bug that survived
+    # several rounds of fixing join_words(): the text was always clean, the
+    # header was lying about the schema.
+    words = [Word(0, 500, "привет")]
+
+    ass = build_ass(words, 1080, 1920)
+
+    events = ass.split("[Events]\n", 1)[1]
+    format_line, dialogue_line = events.split("\n", 2)[:2]
+    field_count = len(format_line.removeprefix("Format:").split(","))
+
+    fields = dialogue_line.split(",", field_count - 1)
+    assert len(fields) == field_count
+    assert fields[-1] == "привет"
+
+
 def test_build_ass_scales_font_to_frame_size() -> None:
     words = [Word(0, 500, "тест")]
 
