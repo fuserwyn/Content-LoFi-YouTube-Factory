@@ -555,6 +555,28 @@ def build_dispatcher(cfg: BotConfig):
         )
         await callback.answer()
 
+    @dp.callback_query(F.data.startswith("cut:"))
+    async def on_cut(callback: CallbackQuery) -> None:
+        _, raw_source, raw_highlight = callback.data.split(":", 2)
+        source_id, highlight_id = int(raw_source), int(raw_highlight)
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        found = await in_db(lambda db: db.highlight_by_id(highlight_id, source_id))
+        if found is None:
+            await callback.answer("Фрагмент не найден", show_alert=True)
+            return
+
+        job_id = await in_db(
+            lambda db: db.enqueue_job(user_id, source_id, highlight_id=highlight_id)
+        )
+        await in_db(
+            lambda db: db.log("clip_requested", user_id=user_id, entity="highlight",
+                              entity_id=highlight_id, meta={"job_id": job_id})
+        )
+        await callback.answer("Режу — пришлю через пару минут")
+
     @dp.callback_query(F.data.startswith("del:"))
     async def on_delete(callback: CallbackQuery) -> None:
         source_id = int(callback.data.split(":", 1)[1])

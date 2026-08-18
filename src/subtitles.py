@@ -26,6 +26,10 @@ MAX_CUE_MS = 2500
 GAP_SPLIT_MS = 450
 MIN_CUE_MS = 400
 
+# Whisper иногда выдаёт знак препинания отдельным токеном. Начавшаяся с него
+# реплика читается как обрывок предыдущей фразы — «,сделали. Мы сейчас».
+LEADING_PUNCT = " ,.;:!?)]}»…-–—"
+
 
 @dataclass
 class Cue:
@@ -60,7 +64,7 @@ def group_words(words: list[Word]) -> list[Cue]:
     def flush() -> None:
         if not bucket:
             return
-        text = " ".join(w.text for w in bucket).strip()
+        text = " ".join(w.text for w in bucket).strip().lstrip(LEADING_PUNCT).strip()
         if text:
             start = bucket[0].start_ms
             end = max(bucket[-1].end_ms, start + MIN_CUE_MS)
@@ -68,6 +72,10 @@ def group_words(words: list[Word]) -> list[Cue]:
         bucket.clear()
 
     for word in words:
+        # Знак препинания без слова не должен открывать реплику: он относится
+        # к предыдущей фразе, которая в этот клип уже не попала.
+        if not bucket and not word.text.strip(LEADING_PUNCT):
+            continue
         if bucket:
             gap = word.start_ms - bucket[-1].end_ms
             pending = " ".join(w.text for w in bucket)

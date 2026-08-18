@@ -8,7 +8,7 @@ from src.remote_assets import S3SyncConfig
 from src.shorts_cut import ShortClip
 from src.shorts_pipeline import PipelineResult
 from src.tenant_store import ClaimedJob
-from src.transcribe import TranscriptSegment
+from src.transcribe import TranscriptSegment, Word
 from src.worker import WorkerSettings, load_worker_settings, process_job, run_once
 
 
@@ -47,6 +47,11 @@ def _result(*, speech=True, clips=1, highlights=1) -> PipelineResult:
     )
 
 
+def _job_render(highlight_id: int = 9) -> ClaimedJob:
+    return ClaimedJob(id=1, user_id=2, source_id=3, highlight_id=highlight_id,
+                      schedule_id=None, attempts=1)
+
+
 def _wire(mocker, result: PipelineResult, tmp_path: Path | None = None):
     # Воркер читает размер скачанного файла для лога, поэтому мок должен
     # отдавать существующий путь, а не выдуманный.
@@ -74,36 +79,50 @@ def _wire(mocker, result: PipelineResult, tmp_path: Path | None = None):
     return db, send, notify
 
 
-def test_process_job_marks_source_ready(mocker) -> None:
-    db, _, _ = _wire(mocker, _result())
+def test_analyze_shows_the_list_without_rendering(mocker) -> None:
+    # Рендер — самая тяжёлая часть; тратить его на невостребованные ролики
+    # незачем, юзер сначала выбирает.
+    db, send, _ = _wire(mocker, _result())
+    db.save_highlights_returning_ids.return_value = [
+        (9, Highlight(0, 25_000, 0.9, "Заголовок", "Почему"))
+    ]
+    show = mocker.patch("src.worker.send_choice_list")
+    mocker.patch("src.worker.save_transcript_blob")
 
     process_job(_job(), db, _cfg(), _settings())
 
-    assert db.set_source_status.call_args[0][1] == "ready"
-    db.finish_job.assert_called_once()
+    show.assert_called_once()
+    send.assert_not_called()
 
 
-def test_process_job_stores_transcript_and_highlights(mocker) -> None:
+def test_analyze_passes_render_false(mocker) -> None:
     db, _, _ = _wire(mocker, _result())
+    db.save_highlights_returning_ids.return_value = [(9, Highlight(0, 25_000, 0.9, "t", "r"))]
+    mocker.patch("src.worker.send_choice_list")
+    mocker.patch("src.worker.save_transcript_blob")
+    build = mocker.patch("src.worker.build_shorts", return_value=_result())
 
     process_job(_job(), db, _cfg(), _settings())
 
-    db.save_transcript.assert_called_once()
-    db.save_highlights.assert_called_once()
+    assert build.call_args.kwargs["render"] is False
 
 
-def test_process_job_fails_when_source_missing(mocker) -> None:
-    _, _, _ = _wire(mocker, _result())
-    db = mocker.MagicMock()
-    db.conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+def test_analyze_stores_transcript_for_later_cutting(mocker) -> None:
+    # Без сохранённого транскрипта нарезка заново распознавала бы весь
+    # исходник — десятки минут ради одного ролика.
+    db, _, _ = _wire(mocker, _result())
+    db.save_highlights_returning_ids.return_value = [(9, Highlight(0, 25_000, 0.9, "t", "r"))]
+    mocker.patch("src.worker.send_choice_list")
+    save_blob = mocker.patch("src.worker.save_transcript_blob")
 
-    assert process_job(_job(), db, _cfg(), _settings()) == 0
-    db.fail_job.assert_called_once()
+    process_job(_job(), db, _cfg(), _settings())
+
+    save_blob.assert_called_once()
 
 
 def test_silent_video_is_not_retried(mocker) -> None:
-    # Повторная попытка речь не создаст — задачу закрываем, а не возвращаем в очередь.
     db, _, notify = _wire(mocker, _result(speech=False))
+    mocker.patch("src.worker.save_transcript_blob")
 
     process_job(_job(), db, _cfg(), _settings())
 
@@ -112,21 +131,66 @@ def test_silent_video_is_not_retried(mocker) -> None:
     assert "не нашлось речи" in notify.call_args[0][2]
 
 
-def test_silent_video_tells_the_user_why(mocker) -> None:
-    # Молчание вместо объяснения читается как поломка сервиса.
-    db, _, notify = _wire(mocker, _result(speech=False))
-
-    process_job(_job(), db, _cfg(), _settings())
-
-    notify.assert_called_once()
-
-
 def test_empty_selection_is_explained(mocker) -> None:
-    db, _, notify = _wire(mocker, _result(clips=0, highlights=0))
+    db, _, notify = _wire(mocker, _result(highlights=0))
+    db.save_highlights_returning_ids.return_value = []
+    mocker.patch("src.worker.save_transcript_blob")
 
     process_job(_job(), db, _cfg(), _settings())
 
     assert "не нашлось" in notify.call_args[0][2]
+
+
+def _wire_render(mocker):
+    mocker.patch("src.worker.download_source", return_value=Path("/tmp/x.mp4"))
+    mocker.patch("src.worker.load_transcript_blob", return_value=[
+        TranscriptSegment(0, 30_000, "текст", [Word(0, 900, "слово")])
+    ])
+    cut = mocker.patch("src.worker.cut_short", return_value=ShortClip(
+        Path("/tmp/out.mp4"), 0, 25_000, True
+    ))
+    upload = mocker.patch("src.worker.upload_output", return_value=True)
+    send = mocker.patch("src.worker.send_clip")
+    db = mocker.MagicMock()
+    db.conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (
+        "uploads/2/x/video.mp4", 555,
+    )
+    db.highlight_by_id.return_value = Highlight(0, 25_000, 0.9, "Заголовок", "Почему")
+    return db, cut, upload, send
+
+
+def test_render_cuts_only_the_requested_fragment(mocker) -> None:
+    db, cut, _, send = _wire_render(mocker)
+
+    assert process_job(_job_render(), db, _cfg(), _settings()) == 1
+    cut.assert_called_once()
+    send.assert_called_once()
+
+
+def test_render_keeps_the_clip_for_download(mocker) -> None:
+    db, _, upload, _ = _wire_render(mocker)
+
+    process_job(_job_render(), db, _cfg(), _settings())
+
+    assert upload.call_args[0][2].startswith("outputs/2/3/")
+
+
+def test_render_fails_when_fragment_is_gone(mocker) -> None:
+    db, cut, _, _ = _wire_render(mocker)
+    db.highlight_by_id.return_value = None
+
+    assert process_job(_job_render(), db, _cfg(), _settings()) == 0
+    db.fail_job.assert_called_once()
+    cut.assert_not_called()
+
+
+def test_process_job_fails_when_source_missing(mocker) -> None:
+    _wire(mocker, _result())
+    db = mocker.MagicMock()
+    db.conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+
+    assert process_job(_job(), db, _cfg(), _settings()) == 0
+    db.fail_job.assert_called_once()
 
 
 def test_run_once_returns_zero_on_empty_queue(mocker) -> None:
@@ -210,44 +274,3 @@ def test_caption_survives_missing_title_and_reason() -> None:
     caption = clip_caption(Highlight(0, 30_000, 0.5, "", ""), 1)
 
     assert "0:00–0:30" in caption
-
-
-def test_clips_are_sent_with_their_timecodes(mocker) -> None:
-    db, send, _ = _wire(mocker, _result())
-
-    process_job(_job(), db, _cfg(), _settings())
-
-    caption = send.call_args[0][3]
-    assert "0:00–0:25" in caption
-
-
-def test_summary_lists_every_timecode(mocker) -> None:
-    db, _, notify = _wire(mocker, _result(clips=1, highlights=1))
-
-    process_job(_job(), db, _cfg(), _settings())
-
-    summary = notify.call_args[0][2]
-    assert "Готово: 1" in summary
-    assert "0:00–0:25" in summary
-
-
-def test_clips_are_kept_in_storage_for_download(mocker) -> None:
-    # Telegram пережимает видео; оригинал нужен тому, кто пойдёт публиковать.
-    db, _, _ = _wire(mocker, _result())
-    upload = mocker.patch("src.worker.upload_output")
-
-    process_job(_job(), db, _cfg(), _settings())
-
-    key = upload.call_args[0][2]
-    assert key.startswith("outputs/2/3/")
-    assert key.endswith(".mp4")
-
-
-def test_output_name_carries_the_timecode(mocker) -> None:
-    db, _, _ = _wire(mocker, _result())
-    upload = mocker.patch("src.worker.upload_output")
-
-    process_job(_job(), db, _cfg(), _settings())
-
-    # Скачанный файл должен быть понятен без чата, в котором его прислали.
-    assert "01_0-00" in upload.call_args[0][2]

@@ -14,6 +14,7 @@ uvicorn, и бот продолжает отвечать, пока считае�
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
@@ -34,7 +35,17 @@ from .bot import (
 from .highlights import Highlight
 from .remote_assets import build_s3_client
 from .shorts_cut import ShortClip
-from .shorts_pipeline import build_shorts
+from .shorts_cut import cut_short
+from .shorts_pipeline import (
+    DEFAULT_CRF,
+    DEFAULT_FPS,
+    DEFAULT_HEIGHT,
+    DEFAULT_PRESET,
+    DEFAULT_WIDTH,
+    build_shorts,
+)
+from .subtitles import build_ass, window_words
+from .transcribe import TranscriptSegment, Word
 from .tenant_store import ClaimedJob, TenantStore
 
 LOGGER = logging.getLogger("content_factory")
@@ -82,6 +93,57 @@ def load_worker_settings() -> WorkerSettings:
         min_seconds=int(os.getenv("SHORTS_MIN_SECONDS", "20")),
         max_seconds=int(os.getenv("SHORTS_MAX_SECONDS", "60")),
     )
+
+
+def transcript_key(user_id: int, source_id: int) -> str:
+    return f"{output_prefix(user_id, source_id)}transcript.json"
+
+
+def save_transcript_blob(cfg: BotConfig, job: ClaimedJob, segments) -> None:
+    """Кладёт транскрипт с пословными таймкодами рядом с нарезкой.
+
+    В базе хранится только текст: пословные тайминги там не нужны никому,
+    кроме субтитров. Но нарезка заказывается позже отдельной задачей, и без
+    этого файла пришлось бы распознавать восемьдесят минут заново.
+    """
+    payload = json.dumps(
+        [
+            {
+                "start_ms": seg.start_ms, "end_ms": seg.end_ms, "text": seg.text,
+                "words": [
+                    {"start_ms": w.start_ms, "end_ms": w.end_ms, "text": w.text}
+                    for w in seg.words
+                ],
+            }
+            for seg in segments
+        ],
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+        handle.write(payload)
+        path = Path(handle.name)
+    try:
+        upload_output(cfg, path, transcript_key(job.user_id, job.source_id))
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def load_transcript_blob(cfg: BotConfig, job: ClaimedJob) -> list[TranscriptSegment]:
+    """Возвращает сохранённый транскрипт. Пустой список, если его нет."""
+    raw = download_bytes(cfg, transcript_key(job.user_id, job.source_id))
+    if not raw:
+        return []
+    return [
+        TranscriptSegment(
+            start_ms=item["start_ms"], end_ms=item["end_ms"], text=item["text"],
+            words=[
+                Word(start_ms=w["start_ms"], end_ms=w["end_ms"], text=w["text"])
+                for w in item.get("words") or []
+            ],
+        )
+        for item in json.loads(raw.decode("utf-8"))
+    ]
 
 
 def notify_text(cfg: BotConfig, chat_id: int, text: str) -> None:
@@ -149,6 +211,14 @@ def send_clip(cfg: BotConfig, chat_id: int, path: Path, caption: str) -> None:
         LOGGER.warning("WORKER: не смог отправить ролик: %s", exc)
 
 
+def download_bytes(cfg: BotConfig, key: str) -> bytes:
+    client = build_s3_client(cfg.s3)
+    try:
+        return client.get_object(Bucket=cfg.bucket_for_uploads, Key=key)["Body"].read()
+    except Exception:  # noqa: BLE001
+        return b""
+
+
 def download_source(cfg: BotConfig, key: str, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     client = build_s3_client(cfg.s3)
@@ -172,22 +242,50 @@ def _job_context(db: TenantStore, job: ClaimedJob) -> tuple[str, int] | None:
     return (row[0], row[1]) if row else None
 
 
-def process_job(
-    job: ClaimedJob,
-    db: TenantStore,
-    cfg: BotConfig,
-    settings: WorkerSettings,
+def send_choice_list(
+    cfg: BotConfig, chat_id: int, source_id: int,
+    stored: list[tuple[int, Highlight]], duration_ms: int,
+) -> None:
+    """Присылает найденные фрагменты кнопками — резать будем только выбранные.
+
+    Рендер самая тяжёлая часть прохода, и тратить его на ролики, которые юзер
+    не заказывал, незачем: на полуторачасовом исходнике это десятки минут
+    процессорного времени впустую.
+    """
+    import requests
+
+    lines = [f"Нашёл {len(stored)} фрагментов в {duration_ms // 60000} мин:"]
+    keyboard = []
+    for index, (highlight_id, highlight) in enumerate(stored, start=1):
+        span = f"{timecode(highlight.start_ms)}–{timecode(highlight.end_ms)}"
+        lines.append(f"\n{index}. {span} · {highlight.title}")
+        if highlight.reason:
+            lines.append(f"   {highlight.reason}")
+        keyboard.append([{
+            "text": f"{index}. {span} · {highlight.title}"[:60],
+            "callback_data": f"cut:{source_id}:{highlight_id}",
+        }])
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{cfg.token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": "\n".join(lines)[:4000],
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        LOGGER.warning("WORKER: не смог отправить список фрагментов: %s", exc)
+
+
+def analyze_source(
+    job: ClaimedJob, db: TenantStore, cfg: BotConfig,
+    settings: WorkerSettings, storage_key: str, tg_chat_id: int,
 ) -> int:
-    """Обрабатывает одну задачу. Возвращает число отданных клипов."""
-    context = _job_context(db, job)
-    if context is None:
-        db.fail_job(job.id, "исходник или юзер не найдены")
-        return 0
-
-    storage_key, tg_chat_id = context
-    delivered = 0
-
-    with tempfile.TemporaryDirectory(prefix="shorts_job_") as tmp:
+    """Распознаёт речь и отбирает фрагменты, ничего не нарезая."""
+    with tempfile.TemporaryDirectory(prefix="shorts_scan_") as tmp:
         tmp_dir = Path(tmp)
         LOGGER.info("WORKER: качаю исходник %s", storage_key)
         source = download_source(cfg, storage_key, tmp_dir / Path(storage_key).name)
@@ -197,83 +295,126 @@ def process_job(
         )
         db.set_source_status(job.source_id, "transcribing")
 
-        def deliver(clip: ShortClip, highlight: Highlight) -> None:
-            nonlocal delivered
-            # Отдаём по мере готовности: если рендер упадёт на пятом ролике,
-            # первые четыре у юзера уже будут.
-            delivered += 1
-            LOGGER.info(
-                "WORKER: готов ролик %s (%s-%s)",
-                delivered, timecode(highlight.start_ms), timecode(highlight.end_ms),
-            )
-
-            # Копия в хранилище — чтобы отдать оригинал ссылкой: Telegram
-            # пережимает видео при отправке, а ролик пойдёт в публикацию.
-            # Имя несёт таймкод, поэтому скачанный файл понятен без чата.
-            mark = timecode_mark(highlight.start_ms)
-            key = f"{output_prefix(job.user_id, job.source_id)}{delivered:02d}_{mark}.mp4"
-            upload_output(cfg, clip.path, key)
-
-            send_clip(cfg, tg_chat_id, clip.path, clip_caption(highlight, delivered))
-
         result = build_shorts(
-            source,
-            tmp_dir / "out",
+            source, tmp_dir / "out",
             whisper_model=settings.whisper_model,
             whisper_download_root=settings.whisper_download_root,
             language=settings.language,
             max_count=settings.max_shorts,
             min_seconds=settings.min_seconds,
             max_seconds=settings.max_seconds,
-            on_clip_ready=deliver,
+            # Ничего не режем: юзер сначала смотрит список.
+            render=False,
         )
 
-        LOGGER.info(
-            "WORKER: речь %s, фрагментов отобрано %s",
-            "найдена" if result.had_speech else "не найдена", len(result.highlights),
+    LOGGER.info(
+        "WORKER: речь %s, фрагментов отобрано %s",
+        "найдена" if result.had_speech else "не найдена", len(result.highlights),
+    )
+    db.set_source_media(job.source_id, result.source_duration_ms // 1000)
+    db.save_transcript(job.source_id, result.segments)
+
+    if not result.had_speech:
+        db.set_source_status(job.source_id, "failed", "в видео не найдено речи")
+        db.finish_job(job.id, output_key="")
+        notify_text(
+            cfg, tg_chat_id,
+            "В этом видео не нашлось речи — нарезать шортсы с субтитрами не из чего. "
+            "Пришли видео, где кто-то говорит.",
         )
-        db.set_source_media(job.source_id, result.source_duration_ms // 1000)
-        db.save_transcript(job.source_id, result.segments)
-        db.save_highlights(job.source_id, result.highlights)
+        return 0
 
-        if not result.had_speech:
-            db.set_source_status(job.source_id, "failed", "в видео не найдено речи")
-            # Не fail_job: повторять нечего, речь от повторной попытки
-            # не появится. Закрываем как выполненную, но без клипов.
-            db.finish_job(job.id, output_key="")
-            notify_text(
-                cfg, tg_chat_id,
-                "В этом видео не нашлось речи — нарезать шортсы с субтитрами не из чего. "
-                "Пришли видео, где кто-то говорит.",
-            )
-            return 0
+    save_transcript_blob(cfg, job, result.segments)
+    stored = db.save_highlights_returning_ids(job.source_id, result.highlights)
 
-        if delivered == 0:
-            notify_text(
-                cfg, tg_chat_id,
-                "Речь распозналась, но подходящих фрагментов не нашлось. "
-                "Обычно так бывает на очень коротких видео — попробуй запись подлиннее.",
-            )
-
-        if delivered:
-            # Сводка одним сообщением: по ней видно всю раскладку сразу,
-            # не пролистывая ролики по одному.
-            lines = [f"Готово: {delivered} роликов из {result.source_duration_ms // 60000} мин"]
-            lines += [
-                f"  {i}. {timecode(h.start_ms)}–{timecode(h.end_ms)}"
-                + (f" · {h.title}" if h.title else "")
-                for i, h in enumerate(result.highlights[:delivered], start=1)
-            ]
-            notify_text(cfg, tg_chat_id, "\n".join(lines))
-
+    if not stored:
         db.set_source_status(job.source_id, "ready")
-        db.finish_job(job.id, output_key=f"{storage_key}#shorts")
-        db.log(
-            "shorts_delivered", user_id=job.user_id, entity="job", entity_id=job.id,
-            meta={"clips": delivered, "highlights": len(result.highlights)},
+        db.finish_job(job.id, output_key="")
+        notify_text(
+            cfg, tg_chat_id,
+            "Речь распозналась, но подходящих фрагментов не нашлось. "
+            "Обычно так бывает на очень коротких видео — попробуй запись подлиннее.",
+        )
+        return 0
+
+    send_choice_list(cfg, tg_chat_id, job.source_id, stored, result.source_duration_ms)
+    db.set_source_status(job.source_id, "ready")
+    db.finish_job(job.id, output_key="")
+    db.log("source_analyzed", user_id=job.user_id, entity="source",
+           entity_id=job.source_id, meta={"highlights": len(stored)})
+    return 0
+
+
+def render_one(
+    job: ClaimedJob, db: TenantStore, cfg: BotConfig,
+    settings: WorkerSettings, storage_key: str, tg_chat_id: int,
+) -> int:
+    """Режет один заказанный фрагмент."""
+    highlight = db.highlight_by_id(job.highlight_id, job.source_id)
+    if highlight is None:
+        db.fail_job(job.id, "фрагмент не найден")
+        return 0
+
+    segments = load_transcript_blob(cfg, job)
+    words = [w for seg in segments for w in seg.words]
+
+    with tempfile.TemporaryDirectory(prefix="shorts_cut_") as tmp:
+        tmp_dir = Path(tmp)
+        source = download_source(cfg, storage_key, tmp_dir / Path(storage_key).name)
+
+        ass_text = ""
+        clip_words = window_words(words, highlight.start_ms, highlight.end_ms)
+        if clip_words:
+            ass_text = build_ass(clip_words, DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        elif not words:
+            # Транскрипт не нашёлся — режем без субтитров, но говорим об этом.
+            LOGGER.warning("WORKER: транскрипт недоступен, режу без субтитров")
+
+        mark = timecode_mark(highlight.start_ms)
+        clip = cut_short(
+            source_path=source,
+            output_path=tmp_dir / f"short_{mark}.mp4",
+            start_ms=highlight.start_ms, end_ms=highlight.end_ms,
+            width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, fps=DEFAULT_FPS,
+            encode_preset=DEFAULT_PRESET, crf=DEFAULT_CRF,
+            ass_text=ass_text,
+        )
+        LOGGER.info(
+            "WORKER: готов ролик %s-%s",
+            timecode(highlight.start_ms), timecode(highlight.end_ms),
         )
 
-    return delivered
+        key = f"{output_prefix(job.user_id, job.source_id)}{mark}.mp4"
+        upload_output(cfg, clip.path, key)
+        send_clip(cfg, tg_chat_id, clip.path, clip_caption(highlight, 1))
+
+    db.finish_job(job.id, output_key=key)
+    db.log("clip_rendered", user_id=job.user_id, entity="highlight",
+           entity_id=job.highlight_id, meta={"key": key})
+    return 1
+
+
+def process_job(
+    job: ClaimedJob,
+    db: TenantStore,
+    cfg: BotConfig,
+    settings: WorkerSettings,
+) -> int:
+    """Обрабатывает одну задачу.
+
+    Задача без ``highlight_id`` — это разбор исходника: распознать речь,
+    отобрать фрагменты и показать их юзеру. С ``highlight_id`` — нарезка
+    одного заказанного фрагмента.
+    """
+    context = _job_context(db, job)
+    if context is None:
+        db.fail_job(job.id, "исходник или юзер не найдены")
+        return 0
+
+    storage_key, tg_chat_id = context
+    if job.highlight_id is None:
+        return analyze_source(job, db, cfg, settings, storage_key, tg_chat_id)
+    return render_one(job, db, cfg, settings, storage_key, tg_chat_id)
 
 
 def run_once(cfg: BotConfig, settings: WorkerSettings) -> int:

@@ -70,6 +70,7 @@ def build_shorts(
     encode_preset: str = DEFAULT_PRESET,
     crf: int = DEFAULT_CRF,
     burn_subtitles: bool = True,
+    render: bool = True,
     on_clip_ready: Callable[[ShortClip, Highlight], None] | None = None,
 ) -> PipelineResult:
     """Транскрибирует исходник, отбирает хайлайты и режет их в вертикальные клипы.
@@ -100,6 +101,12 @@ def build_shorts(
         min_seconds=min_seconds,
         max_seconds=max_seconds,
     )
+
+    # Разбор без нарезки: юзер сначала смотрит список фрагментов и
+    # заказывает нужные. Рендер — самая тяжёлая часть прохода, и тратить
+    # его на невостребованные ролики незачем.
+    if not render:
+        return result
 
     words = _all_words(result.segments)
     output_dir.mkdir(parents=True, exist_ok=True)

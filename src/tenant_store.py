@@ -267,12 +267,16 @@ class TenantStore:
                 )
         self.conn.commit()
 
-    def highlights_for_source(self, source_id: int) -> list[Highlight]:
-        """Все отобранные фрагменты — для показа юзеру списком."""
+    def highlights_for_source(self, source_id: int) -> list[tuple[int, Highlight]]:
+        """Отобранные фрагменты с их идентификаторами, по времени.
+
+        Идентификатор нужен, чтобы юзер мог заказать нарезку конкретного
+        фрагмента: он уезжает в callback кнопки и приходит обратно в задачу.
+        """
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT start_ms, end_ms, score, title, reason
+                SELECT id, start_ms, end_ms, score, title, reason
                   FROM highlights
                  WHERE source_id = %s
                  ORDER BY start_ms
@@ -281,10 +285,34 @@ class TenantStore:
             )
             rows = cur.fetchall()
         return [
-            Highlight(start_ms=r[0], end_ms=r[1], score=float(r[2]),
-                      title=r[3] or "", reason=r[4] or "")
+            (r[0], Highlight(start_ms=r[1], end_ms=r[2], score=float(r[3]),
+                             title=r[4] or "", reason=r[5] or ""))
             for r in rows
         ]
+
+    def highlight_by_id(self, highlight_id: int, source_id: int) -> Highlight | None:
+        """Фрагмент по идентификатору, с проверкой, что он от этой загрузки."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT start_ms, end_ms, score, title, reason
+                  FROM highlights
+                 WHERE id = %s AND source_id = %s
+                """,
+                (highlight_id, source_id),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return Highlight(start_ms=row[0], end_ms=row[1], score=float(row[2]),
+                         title=row[3] or "", reason=row[4] or "")
+
+    def save_highlights_returning_ids(
+        self, source_id: int, highlights: list[Highlight]
+    ) -> list[tuple[int, Highlight]]:
+        """Перезаписывает фрагменты и возвращает их с новыми идентификаторами."""
+        self.save_highlights(source_id, highlights)
+        return self.highlights_for_source(source_id)
 
     def take_next_highlight(self, source_id: int) -> tuple[int, Highlight] | None:
         """Забирает лучший неиспользованный хайлайт и сразу помечает его.

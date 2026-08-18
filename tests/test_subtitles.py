@@ -104,3 +104,28 @@ def test_build_ass_without_words_yields_no_dialogue() -> None:
 
     assert "Dialogue:" not in ass
     assert "[Events]" in ass
+
+
+def test_cue_does_not_open_with_punctuation() -> None:
+    # Whisper отдаёт знак отдельным токеном; реплика, начавшаяся с него,
+    # читается как обрывок предыдущей фразы.
+    words = [Word(0, 100, ","), Word(120, 600, "сделали"), Word(650, 1000, "Мы")]
+
+    cues = group_words(words)
+
+    assert cues[0].text == "сделали Мы"
+
+
+def test_punctuation_glued_to_a_word_survives() -> None:
+    # Убирать надо только ведущий знак, а не пунктуацию внутри реплики.
+    words = [Word(0, 500, "сделали."), Word(600, 900, "Мы")]
+
+    cues = group_words(words)
+
+    assert "сделали." in cues[0].text
+
+
+def test_cue_of_only_punctuation_is_dropped() -> None:
+    words = [Word(0, 100, ","), Word(200, 300, "—")]
+
+    assert group_words(words) == []
