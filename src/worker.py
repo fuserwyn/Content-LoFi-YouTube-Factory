@@ -66,7 +66,17 @@ def load_worker_settings() -> WorkerSettings:
         # задачу, если она подвиснет.
         worker_id=os.getenv("RAILWAY_REPLICA_ID", "").strip() or f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}",
         whisper_model=os.getenv("WHISPER_MODEL", "").strip() or "tiny",
-        whisper_download_root=os.getenv("WHISPER_DOWNLOAD_ROOT", "").strip(),
+        # Веса Whisper весят сотни мегабайт. Без волюма они лягут в
+        # эфемерную файловую систему и будут качаться заново после каждого
+        # деплоя — это минуты простоя на ровном месте.
+        whisper_download_root=(
+            os.getenv("WHISPER_DOWNLOAD_ROOT", "").strip()
+            or (
+                f'{os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()}/whisper'
+                if os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+                else ""
+            )
+        ),
         language=os.getenv("WHISPER_LANGUAGE", "").strip(),
         max_shorts=int(os.getenv("SHORTS_MAX_PER_SOURCE", "5")),
         min_seconds=int(os.getenv("SHORTS_MIN_SECONDS", "20")),
@@ -179,7 +189,12 @@ def process_job(
 
     with tempfile.TemporaryDirectory(prefix="shorts_job_") as tmp:
         tmp_dir = Path(tmp)
+        LOGGER.info("WORKER: качаю исходник %s", storage_key)
         source = download_source(cfg, storage_key, tmp_dir / Path(storage_key).name)
+        LOGGER.info(
+            "WORKER: исходник на месте, %.0f МБ — распознаю речь",
+            source.stat().st_size / 1048576,
+        )
         db.set_source_status(job.source_id, "transcribing")
 
         def deliver(clip: ShortClip, highlight: Highlight) -> None:
@@ -187,6 +202,10 @@ def process_job(
             # Отдаём по мере готовности: если рендер упадёт на пятом ролике,
             # первые четыре у юзера уже будут.
             delivered += 1
+            LOGGER.info(
+                "WORKER: готов ролик %s (%s-%s)",
+                delivered, timecode(highlight.start_ms), timecode(highlight.end_ms),
+            )
 
             # Копия в хранилище — чтобы отдать оригинал ссылкой: Telegram
             # пережимает видео при отправке, а ролик пойдёт в публикацию.
@@ -209,6 +228,10 @@ def process_job(
             on_clip_ready=deliver,
         )
 
+        LOGGER.info(
+            "WORKER: речь %s, фрагментов отобрано %s",
+            "найдена" if result.had_speech else "не найдена", len(result.highlights),
+        )
         db.set_source_media(job.source_id, result.source_duration_ms // 1000)
         db.save_transcript(job.source_id, result.segments)
         db.save_highlights(job.source_id, result.highlights)

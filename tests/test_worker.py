@@ -47,8 +47,14 @@ def _result(*, speech=True, clips=1, highlights=1) -> PipelineResult:
     )
 
 
-def _wire(mocker, result: PipelineResult):
-    mocker.patch("src.worker.download_source", return_value=Path("/tmp/src.mp4"))
+def _wire(mocker, result: PipelineResult, tmp_path: Path | None = None):
+    # Воркер читает размер скачанного файла для лога, поэтому мок должен
+    # отдавать существующий путь, а не выдуманный.
+    import tempfile
+
+    fake = Path(tempfile.mkstemp(suffix=".mp4")[1])
+    fake.write_bytes(b"x" * 1024)
+    mocker.patch("src.worker.download_source", return_value=fake)
     def fake_build(*_a, on_clip_ready=None, **_kw):
         # Настоящий build_shorts зовёт колбэк на каждый готовый клип —
         # без этого воркер считает, что не отдал ничего.
