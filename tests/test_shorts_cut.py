@@ -180,3 +180,32 @@ def test_filter_resets_pixel_aspect_ratio() -> None:
 
     assert "setsar=1" in chain
     assert chain.index("crop=") < chain.index("setsar=1")
+
+
+def test_crop_offset_centres_faces() -> None:
+    from src.face_focus import crop_offset
+
+    # Лица в правой трети кадра шириной 3413 -> рамка 1080 едет вправо.
+    assert crop_offset(3413, 1080, 0.75) == int(3413 * 0.75 - 540)
+
+
+def test_crop_offset_stays_inside_the_frame() -> None:
+    from src.face_focus import crop_offset
+
+    assert crop_offset(3413, 1080, 0.0) == 0
+    assert crop_offset(3413, 1080, 1.0) == 3413 - 1080
+
+
+def test_crop_offset_falls_back_to_centre_without_faces() -> None:
+    # Отсутствие лиц — нормальный исход, а не ошибка: в кадре может не быть людей.
+    from src.face_focus import crop_offset
+
+    assert crop_offset(3413, 1080, None) == (3413 - 1080) // 2
+
+
+def test_filter_uses_the_offset_when_given() -> None:
+    assert "crop=1080:1920:700:0" in _build_filter(1080, 1920, 30, "", 700)
+
+
+def test_filter_centres_when_no_offset() -> None:
+    assert "crop=1080:1920," in _build_filter(1080, 1920, 30, "", None) + ","

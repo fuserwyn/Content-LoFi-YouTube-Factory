@@ -143,3 +143,20 @@ def test_no_cue_opens_with_a_comma_however_whisper_splits_it() -> None:
     for words in variants:
         for cue in group_words(words):
             assert not cue.text.lstrip().startswith(",")
+
+
+def test_standalone_comma_does_not_get_its_own_space() -> None:
+    # «слово , слово» при переносе строки разрывается перед запятой, и она
+    # встаёт в начало строки — ровно то, что видно в готовых роликах.
+    words = [Word(0, 300, "было"), Word(310, 340, ","), Word(350, 700, "что-то")]
+
+    text = group_words(words)[0].text
+
+    assert " ," not in text
+    assert text == "было, что-то"
+
+
+def test_comma_glued_to_the_next_word_moves_back() -> None:
+    words = [Word(0, 400, "было"), Word(410, 800, ",что-то")]
+
+    assert group_words(words)[0].text == "было, что-то"

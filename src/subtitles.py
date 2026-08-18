@@ -30,6 +30,11 @@ MIN_CUE_MS = 400
 # реплика читается как обрывок предыдущей фразы — «,сделали. Мы сейчас».
 LEADING_PUNCT = " ,.;:!?)]}»…-–—"
 
+# Знаки, которые обязаны примыкать к предыдущему слову. Если оставить их
+# отдельным токеном, текст собирается как «слово , слово», и перенос строки
+# может разорваться перед запятой — она встанет в начало строки.
+CLINGING_PUNCT = ",.;:!?…»)]}"
+
 
 @dataclass
 class Cue:
@@ -56,6 +61,32 @@ def _timestamp(ms: int) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}.{millis // 10:02d}"
 
 
+def join_words(words: list[Word]) -> str:
+    """Склеивает слова в текст реплики, прижимая пунктуацию к словам.
+
+    Whisper выдаёт знак препинания то отдельным токеном, то приклеенным
+    спереди к следующему слову. Наивное соединение через пробел даёт
+    «слово , слово», и при переносе запятая уезжает в начало строки.
+    """
+    parts: list[str] = []
+    for word in words:
+        text = word.text.strip()
+        if not text:
+            continue
+        if parts and not text.strip(LEADING_PUNCT):
+            # Чистая пунктуация — прижимаем к предыдущему слову.
+            parts[-1] += text
+        elif parts and text[0] in CLINGING_PUNCT:
+            # Знак приклеен спереди: отдаём его назад, остальное — новое слово.
+            parts[-1] += text[0]
+            rest = text[1:].strip()
+            if rest:
+                parts.append(rest)
+        else:
+            parts.append(text)
+    return " ".join(parts)
+
+
 def group_words(words: list[Word]) -> list[Cue]:
     """Режет поток слов на короткие реплики по паузам, длине и числу слов."""
     cues: list[Cue] = []
@@ -64,7 +95,7 @@ def group_words(words: list[Word]) -> list[Cue]:
     def flush() -> None:
         if not bucket:
             return
-        text = " ".join(w.text for w in bucket).strip().lstrip(LEADING_PUNCT).strip()
+        text = join_words(bucket).strip().lstrip(LEADING_PUNCT).strip()
         if text:
             start = bucket[0].start_ms
             end = max(bucket[-1].end_ms, start + MIN_CUE_MS)
@@ -78,7 +109,7 @@ def group_words(words: list[Word]) -> list[Cue]:
             continue
         if bucket:
             gap = word.start_ms - bucket[-1].end_ms
-            pending = " ".join(w.text for w in bucket)
+            pending = join_words(bucket)
             too_long = word.end_ms - bucket[0].start_ms > MAX_CUE_MS
             too_many = len(bucket) >= MAX_WORDS_PER_CUE
             too_wide = len(pending) + 1 + len(word.text) > MAX_CHARS_PER_CUE

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
+from .face_focus import crop_offset, focus_fraction
 from .ffmpeg_utils import finalize_ffmpeg_command
 
 
@@ -31,7 +32,26 @@ class ShortsCutError(RuntimeError):
     pass
 
 
-def _build_filter(width: int, height: int, fps: int, ass_name: str) -> str:
+def _source_size(path: Path) -> tuple[int, int]:
+    """Размер исходника — нужен, чтобы посчитать смещение рамки в пикселях."""
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height",
+         "-of", "csv=p=0:s=x", str(path)],
+        check=False, capture_output=True, text=True,
+    )
+    try:
+        w, h = proc.stdout.strip().split("x")[:2]
+        return int(w), int(h)
+    except Exception:  # noqa: BLE001
+        # Не разобрали вывод — значит размер неизвестен. Это законный исход:
+        # вызывающий код просто обрежет по центру, как раньше.
+        return 0, 0
+
+
+def _build_filter(
+    width: int, height: int, fps: int, ass_name: str, crop_x: int | None = None
+) -> str:
     """Кадрируем в 9:16 обрезкой по центру, затем поверх кладём субтитры.
 
     Порядок важен: ``ass`` после ``crop``, иначе подпись отрендерится в
@@ -39,7 +59,9 @@ def _build_filter(width: int, height: int, fps: int, ass_name: str) -> str:
     """
     chain = [
         f"scale={width}:{height}:force_original_aspect_ratio=increase",
-        f"crop={width}:{height}",
+        # Без смещения ffmpeg обрезает по центру. В разговорном видео это
+        # обычно стена между собеседниками, поэтому рамку двигаем к лицам.
+        f"crop={width}:{height}" if crop_x is None else f"crop={width}:{height}:{crop_x}:0",
         # Соотношение сторон пикселя наследуется от исходника. Если оно не
         # единичное, кадр 1080x1920 отображается не как 9:16, и плеер тянет
         # картинку — размер верный, а видео выглядит невертикальным.
@@ -62,6 +84,7 @@ def cut_short(
     encode_preset: str,
     crf: int,
     ass_text: str = "",
+    follow_faces: bool = True,
 ) -> ShortClip:
     """Режет окно ``[start_ms, end_ms)`` в вертикальный клип.
 
@@ -86,6 +109,19 @@ def cut_short(
         ass_path.write_text(ass_text, encoding="utf-8")
         ass_name = ass_path.name
 
+    crop_x: int | None = None
+    if follow_faces:
+        source_w, source_h = _source_size(source_path)
+        if source_w and source_h:
+            # Обрезка идёт после масштабирования, поэтому и смещение считаем
+            # в координатах уже увеличенного кадра.
+            scale = max(width / source_w, height / source_h)
+            scaled_width = int(source_w * scale)
+            if scaled_width > width:
+                fraction = focus_fraction(source_path, start_ms, end_ms)
+                if fraction is not None:
+                    crop_x = crop_offset(scaled_width, width, fraction)
+
     duration_s = (end_ms - start_ms) / 1000
 
     cmd = [
@@ -93,7 +129,7 @@ def cut_short(
         "-ss", f"{start_ms / 1000:.3f}",
         "-t", f"{duration_s:.3f}",
         "-i", str(source_path.resolve()),
-        "-vf", _build_filter(width, height, fps, ass_name),
+        "-vf", _build_filter(width, height, fps, ass_name, crop_x),
         "-map", "0:v:0",
         # '?' делает дорожку необязательной: немое видео не должно ронять рендер.
         "-map", "0:a:0?",
