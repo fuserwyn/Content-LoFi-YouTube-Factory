@@ -164,6 +164,52 @@ def object_size(cfg: BotConfig, key: str) -> int:
         return 0
 
 
+OUTPUT_PREFIX = "outputs"
+
+DOWNLOAD_URL_TTL_SECONDS = 24 * 3600
+
+
+def output_prefix(user_id: int, source_id: int) -> str:
+    """Куда воркер складывает готовые ролики этой загрузки.
+
+    Ключ выводится из идентификаторов, поэтому список клипов получается
+    перечислением префикса — отдельная таблица и миграция под это не нужны.
+    """
+    return f"{OUTPUT_PREFIX}/{user_id}/{source_id}/"
+
+
+def presigned_download_url(cfg: BotConfig, key: str) -> str:
+    client = build_s3_client(cfg.s3)
+    return client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": cfg.bucket_for_uploads, "Key": key},
+        ExpiresIn=DOWNLOAD_URL_TTL_SECONDS,
+    )
+
+
+def list_outputs(cfg: BotConfig, user_id: int, source_id: int) -> list[str]:
+    """Ключи готовых роликов по порядку. Пустой список, если их ещё нет."""
+    client = build_s3_client(cfg.s3)
+    try:
+        response = client.list_objects_v2(
+            Bucket=cfg.bucket_for_uploads, Prefix=output_prefix(user_id, source_id)
+        )
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("не смог перечислить готовые ролики")
+        return []
+    return sorted(obj["Key"] for obj in response.get("Contents") or [])
+
+
+def upload_output(cfg: BotConfig, path, key: str) -> bool:
+    client = build_s3_client(cfg.s3)
+    try:
+        client.upload_file(str(path), cfg.bucket_for_uploads, key)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("не смог загрузить готовый ролик %s", key)
+        return False
+    return True
+
+
 def delete_object(cfg: BotConfig, key: str) -> bool:
     """Удаляет исходник из хранилища. True, если объекта больше нет.
 
@@ -388,6 +434,10 @@ def build_dispatcher(cfg: BotConfig):
                         text="Нарезать заново", callback_data=f"redo:{source_id}"
                     ),
                     InlineKeyboardButton(
+                        text="Скачать оригиналы", callback_data=f"dl:{source_id}"
+                    ),
+                ], [
+                    InlineKeyboardButton(
                         text="Удалить", callback_data=f"del:{source_id}"
                     ),
                 ]]),
@@ -433,6 +483,32 @@ def build_dispatcher(cfg: BotConfig):
         )
         await callback.answer()
 
+    @dp.callback_query(F.data.startswith("dl:"))
+    async def on_download(callback: CallbackQuery) -> None:
+        source_id = int(callback.data.split(":", 1)[1])
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        keys = await asyncio.to_thread(list_outputs, cfg, user_id, source_id)
+        if not keys:
+            await callback.answer("Готовых роликов пока нет", show_alert=True)
+            return
+
+        # Ссылки выписываем в момент нажатия: выданные заранее протухли бы
+        # раньше, чем юзер до них добрался.
+        links = []
+        for index, obj_key in enumerate(keys, start=1):
+            url = await asyncio.to_thread(presigned_download_url, cfg, obj_key)
+            links.append(f"{index}. {obj_key.rsplit('/', 1)[-1]}\n{url}")
+
+        await callback.message.answer(
+            "Оригиналы без сжатия Telegram, ссылки действуют сутки:\n\n"
+            + "\n\n".join(links),
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+
     @dp.callback_query(F.data.startswith("del:"))
     async def on_delete(callback: CallbackQuery) -> None:
         source_id = int(callback.data.split(":", 1)[1])
@@ -441,6 +517,10 @@ def build_dispatcher(cfg: BotConfig):
             return
 
         removed = await asyncio.to_thread(delete_object, cfg, key)
+        # Вместе с исходником убираем и нарезку: иначе она осталась бы
+        # висеть в хранилище, за которое платим, без всякой связи с юзером.
+        for out_key in await asyncio.to_thread(list_outputs, cfg, user_id, source_id):
+            await asyncio.to_thread(delete_object, cfg, out_key)
         await in_db(lambda db: db.mark_source_deleted(source_id))
         await in_db(
             lambda db: db.log("source_deleted", user_id=user_id, entity="source",

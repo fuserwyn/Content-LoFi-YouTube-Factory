@@ -60,6 +60,7 @@ def _wire(mocker, result: PipelineResult):
     mocker.patch("src.worker.build_shorts", side_effect=fake_build)
     send = mocker.patch("src.worker.send_clip")
     notify = mocker.patch("src.worker.notify_text")
+    mocker.patch("src.worker.upload_output", return_value=True)
     db = mocker.MagicMock()
     db.conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (
         "uploads/2/x/video.mp4", 555,
@@ -222,3 +223,25 @@ def test_summary_lists_every_timecode(mocker) -> None:
     summary = notify.call_args[0][2]
     assert "Готово: 1" in summary
     assert "0:00–0:25" in summary
+
+
+def test_clips_are_kept_in_storage_for_download(mocker) -> None:
+    # Telegram пережимает видео; оригинал нужен тому, кто пойдёт публиковать.
+    db, _, _ = _wire(mocker, _result())
+    upload = mocker.patch("src.worker.upload_output")
+
+    process_job(_job(), db, _cfg(), _settings())
+
+    key = upload.call_args[0][2]
+    assert key.startswith("outputs/2/3/")
+    assert key.endswith(".mp4")
+
+
+def test_output_name_carries_the_timecode(mocker) -> None:
+    db, _, _ = _wire(mocker, _result())
+    upload = mocker.patch("src.worker.upload_output")
+
+    process_job(_job(), db, _cfg(), _settings())
+
+    # Скачанный файл должен быть понятен без чата, в котором его прислали.
+    assert "01_0-00" in upload.call_args[0][2]

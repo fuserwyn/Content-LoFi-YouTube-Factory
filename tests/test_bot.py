@@ -231,3 +231,58 @@ def test_delete_uses_the_uploads_bucket(mocker) -> None:
     delete_object(_cfg(uploads_bucket="shortscutter"), "k")
 
     assert client.delete_object.call_args.kwargs["Bucket"] == "shortscutter"
+
+
+def test_output_prefix_is_scoped_per_source() -> None:
+    from src.bot import output_prefix
+
+    assert output_prefix(7, 42) == "outputs/7/42/"
+
+
+def test_list_outputs_returns_keys_in_order(mocker) -> None:
+    from src.bot import list_outputs
+
+    client = mocker.Mock()
+    client.list_objects_v2.return_value = {"Contents": [
+        {"Key": "outputs/7/42/02_1-15.mp4"},
+        {"Key": "outputs/7/42/01_0-10.mp4"},
+    ]}
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert list_outputs(_cfg(), 7, 42) == [
+        "outputs/7/42/01_0-10.mp4", "outputs/7/42/02_1-15.mp4",
+    ]
+
+
+def test_list_outputs_is_empty_when_nothing_rendered(mocker) -> None:
+    from src.bot import list_outputs
+
+    client = mocker.Mock()
+    client.list_objects_v2.return_value = {}
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert list_outputs(_cfg(), 7, 42) == []
+
+
+def test_download_url_is_signed_for_get(mocker) -> None:
+    # Ссылка на скачивание должна подписываться под GET: под PUT она
+    # открывалась бы в браузере той же ошибкой подписи, что и загрузка.
+    from src.bot import presigned_download_url
+
+    client = mocker.Mock()
+    client.generate_presigned_url.return_value = "https://signed"
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    presigned_download_url(_cfg(), "outputs/7/42/01.mp4")
+
+    assert client.generate_presigned_url.call_args[0][0] == "get_object"
+
+
+def test_upload_output_reports_failure(mocker) -> None:
+    from src.bot import upload_output
+
+    client = mocker.Mock()
+    client.upload_file.side_effect = RuntimeError("denied")
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert upload_output(_cfg(), "/tmp/x.mp4", "outputs/1/1/01.mp4") is False
