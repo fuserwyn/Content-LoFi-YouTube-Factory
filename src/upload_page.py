@@ -140,7 +140,13 @@ def storage_problem(cfg: BotConfig) -> str:
 
     try:
         rules = client.get_bucket_cors(Bucket=bucket).get("CORSRules") or []
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # Токену может не хватать прав на чтение политики — это не значит,
+        # что её нет. Блокировать здесь означало бы перекрыть работающую
+        # загрузку из-за нехватки прав у проверяющего, а не у загружающего.
+        if "AccessDenied" in str(exc):
+            LOGGER.info("UPLOAD PAGE: CORS не проверить — нет прав на чтение политики")
+            return ""
         return "У хранилища не настроены правила доступа из браузера (CORS)."
 
     if not any("PUT" in (r.get("AllowedMethods") or []) for r in rules):

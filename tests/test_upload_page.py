@@ -111,3 +111,16 @@ def test_storage_problem_silent_when_ready(mocker) -> None:
     from src.upload_page import storage_problem
 
     assert storage_problem(_cfg()) == ""
+
+
+def test_storage_problem_allows_when_cors_is_unreadable(mocker) -> None:
+    # Нет прав посмотреть политику — не то же самое, что политики нет.
+    # Блокировка здесь перекрыла бы рабочую загрузку.
+    client = mocker.Mock()
+    client.get_bucket_cors.side_effect = RuntimeError(
+        "An error occurred (AccessDenied) when calling the GetBucketCors operation"
+    )
+    mocker.patch("src.upload_page.build_s3_client", return_value=client)
+    from src.upload_page import storage_problem
+
+    assert storage_problem(_cfg()) == ""
