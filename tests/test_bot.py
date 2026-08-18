@@ -297,3 +297,13 @@ def test_timecode_mark_matches_between_writer_and_reader() -> None:
     assert timecode_mark(192_000) == "3-12"
     assert timecode(192_000) == "3:12"
     assert timecode_mark(3_725_000) == "1-02-05"
+
+
+def test_timecode_is_shared_between_bot_and_worker() -> None:
+    # Одна реализация на обе стороны: разошедшиеся форматы дали бы
+    # в списке одно время, а в подписи к ролику другое.
+    from src.bot import timecode as bot_timecode
+    from src.worker import timecode as worker_timecode
+
+    assert bot_timecode is worker_timecode
+    assert bot_timecode(3_725_000) == "1:02:05"

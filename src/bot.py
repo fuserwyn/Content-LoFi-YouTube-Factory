@@ -187,6 +187,16 @@ def presigned_download_url(cfg: BotConfig, key: str) -> str:
     )
 
 
+def timecode(ms: int) -> str:
+    """Позиция в исходнике как Ч:ММ:СС."""
+    total = ms // 1000
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
 def timecode_mark(ms: int) -> str:
     """Метка времени в имени файла: ``3-12`` для 3:12.
 
@@ -445,12 +455,15 @@ def build_dispatcher(cfg: BotConfig):
                 f"Загрузка #{source_id} — {status}{length}, готовых роликов: {done}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
-                        text="Нарезать заново", callback_data=f"redo:{source_id}"
+                        text="Фрагменты", callback_data=f"list:{source_id}"
                     ),
                     InlineKeyboardButton(
-                        text="Скачать оригиналы", callback_data=f"dl:{source_id}"
+                        text="Скачать нарезанное", callback_data=f"dl:{source_id}"
                     ),
                 ], [
+                    InlineKeyboardButton(
+                        text="Разобрать заново", callback_data=f"redo:{source_id}"
+                    ),
                     InlineKeyboardButton(
                         text="Удалить", callback_data=f"del:{source_id}"
                     ),
@@ -552,6 +565,40 @@ def build_dispatcher(cfg: BotConfig):
         await callback.message.answer(
             f"{keys[index].rsplit('/', 1)[-1]} — ссылка действует сутки:\n{url}",
             disable_web_page_preview=True,
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("list:"))
+    async def on_list_fragments(callback: CallbackQuery) -> None:
+        source_id = int(callback.data.split(":", 1)[1])
+        _, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        stored = await in_db(lambda db: db.highlights_for_source(source_id))
+        if not stored:
+            await callback.answer(
+                "Фрагменты ещё не отобраны — нажми «Разобрать заново»",
+                show_alert=True,
+            )
+            return
+
+        # Тот же список, что приходит после разбора: сообщение можно
+        # потерять в переписке, а вернуться к выбору нужно в любой момент.
+        lines, rows = [f"Фрагменты загрузки #{source_id}:"], []
+        for index, (highlight_id, highlight) in enumerate(stored, start=1):
+            span = f"{timecode(highlight.start_ms)}–{timecode(highlight.end_ms)}"
+            lines.append(f"\n{index}. {span} · {highlight.title}")
+            if highlight.reason:
+                lines.append(f"   {highlight.reason}")
+            rows.append([InlineKeyboardButton(
+                text=f"{index}. {span} · {highlight.title}"[:60],
+                callback_data=f"cut:{source_id}:{highlight_id}",
+            )])
+
+        await callback.message.answer(
+            "\n".join(lines)[:4000],
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
         await callback.answer()
 

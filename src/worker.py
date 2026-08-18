@@ -29,6 +29,7 @@ from .bot import (
     BotConfig,
     load_bot_config,
     output_prefix,
+    timecode,
     timecode_mark,
     upload_output,
 )
@@ -162,16 +163,6 @@ def notify_text(cfg: BotConfig, chat_id: int, text: str) -> None:
         )
     except requests.RequestException as exc:
         LOGGER.warning("WORKER: не смог отправить сообщение юзеру: %s", exc)
-
-
-def timecode(ms: int) -> str:
-    """Позиция в исходнике как ЧЧ:ММ:СС — юзеру нужно уметь найти это место."""
-    total = ms // 1000
-    hours, rest = divmod(total, 3600)
-    minutes, seconds = divmod(rest, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes}:{seconds:02d}"
 
 
 def clip_caption(highlight: Highlight, index: int) -> str:
