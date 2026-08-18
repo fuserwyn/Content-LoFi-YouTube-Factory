@@ -90,7 +90,7 @@ def notify_text(cfg: BotConfig, chat_id: int, text: str) -> None:
 def download_source(cfg: BotConfig, key: str, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     client = build_s3_client(cfg.s3)
-    client.download_file(cfg.s3.bucket, key, str(dest))
+    client.download_file(cfg.bucket_for_uploads, key, str(dest))
     return dest
 
 

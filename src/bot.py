@@ -59,7 +59,15 @@ class BotConfig:
     public_base_url: str
     admin_chat_id: str
     s3: S3SyncConfig
+    # Загрузки юзеров держим отдельно от ассетов лофи-конвейера: чужой
+    # контент и свои треки не должны жить в одном бакете — разные права
+    # доступа, разный жизненный цикл, разная ответственность при инциденте.
+    uploads_bucket: str = ""
     upload_prefix: str = "uploads"
+
+    @property
+    def bucket_for_uploads(self) -> str:
+        return self.uploads_bucket or self.s3.bucket
 
     @property
     def configured(self) -> bool:
@@ -84,6 +92,7 @@ def load_bot_config() -> BotConfig:
             )
         ),
         admin_chat_id=os.getenv("ADMIN_CHAT_ID", "").strip(),
+        uploads_bucket=os.getenv("UPLOADS_S3_BUCKET", "").strip(),
         s3=S3SyncConfig(
             enabled=True,
             bucket=os.getenv("ASSETS_S3_BUCKET", "").strip(),
@@ -135,7 +144,7 @@ def presigned_upload_url(cfg: BotConfig, key: str) -> str:
     client = build_s3_client(cfg.s3)
     return client.generate_presigned_url(
         "put_object",
-        Params={"Bucket": cfg.s3.bucket, "Key": key},
+        Params={"Bucket": cfg.bucket_for_uploads, "Key": key},
         ExpiresIn=UPLOAD_URL_TTL_SECONDS,
     )
 
@@ -148,7 +157,9 @@ def object_size(cfg: BotConfig, key: str) -> int:
     """
     client = build_s3_client(cfg.s3)
     try:
-        return int(client.head_object(Bucket=cfg.s3.bucket, Key=key)["ContentLength"])
+        return int(
+            client.head_object(Bucket=cfg.bucket_for_uploads, Key=key)["ContentLength"]
+        )
     except Exception:  # noqa: BLE001 — botocore бросает ClientError и его подвиды
         return 0
 
