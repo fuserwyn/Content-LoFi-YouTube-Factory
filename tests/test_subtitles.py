@@ -80,14 +80,14 @@ def test_build_ass_has_header_and_dialogue_lines() -> None:
     assert ass.count("Dialogue:") == 2
 
 
-def test_build_ass_scales_font_to_frame_height() -> None:
+def test_build_ass_scales_font_to_frame_size() -> None:
     words = [Word(0, 500, "тест")]
 
     small = build_ass(words, 540, 960)
     large = build_ass(words, 1080, 1920)
 
-    assert "DejaVu Sans,43" in small
-    assert "DejaVu Sans,87" in large
+    assert "DejaVu Sans,40" in small
+    assert "DejaVu Sans,80" in large
 
 
 def test_build_ass_escapes_brace_syntax() -> None:

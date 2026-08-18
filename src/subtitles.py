@@ -18,7 +18,9 @@ from .transcribe import Word
 DEFAULT_FONT = "DejaVu Sans"
 
 MAX_WORDS_PER_CUE = 4
-MAX_CHARS_PER_CUE = 32
+# При кегле около height/24 на ширину 1080 в строку влезает примерно
+# двадцать символов. Больше — либо перенос, либо вылет за кадр.
+MAX_CHARS_PER_CUE = 22
 MAX_CUE_MS = 2500
 # Пауза длиннее этой рвёт реплику, даже если слов набралось мало.
 GAP_SPLIT_MS = 450
@@ -112,7 +114,9 @@ def build_ass(
     """ASS-документ для клипа. ``words`` уже должны быть сдвинуты к началу клипа."""
     # Кегль и отступ от низа считаем от высоты кадра, чтобы вёрстка не поехала
     # при смене разрешения. Отступ поднимает текст над плашкой плеера.
-    size = font_size or max(24, height // 22)
+    # Кегль ограничен и высотой, и шириной: на узком кадре текст,
+    # подобранный только по высоте, вылезает за края.
+    size = font_size or max(24, min(height // 24, width // 13))
     bottom = margin_v or int(height * 0.18)
     side = int(width * 0.06)
 
@@ -120,7 +124,7 @@ def build_ass(
 ScriptType: v4.00+
 PlayResX: {width}
 PlayResY: {height}
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]

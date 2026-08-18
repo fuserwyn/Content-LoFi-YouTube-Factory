@@ -252,9 +252,72 @@ def test_find_highlights_raises_when_no_choices(mocker) -> None:
 def test_find_highlights_caps_result_count(mocker) -> None:
     import json as _json
 
+    # Транскрипт должен покрывать окна: иначе подтяжка границ схлопнет их.
+    long_transcript = [
+        TranscriptSegment(i * 70_000, i * 70_000 + 30_000, f"реплика {i}")
+        for i in range(8)
+    ]
     windows = [(i * 70_000, i * 70_000 + 30_000, 0.9 - i / 100) for i in range(8)]
     _patch_post(mocker, _mock_response(mocker, content=_json.dumps(_payload(*windows))))
 
-    found = find_highlights(_segments(), HOUR_MS, "key", max_count=3)
+    found = find_highlights(long_transcript, HOUR_MS, "key", max_count=3)
 
     assert len(found) == 3
+
+
+def _speech() -> list[TranscriptSegment]:
+    return [
+        TranscriptSegment(0, 10_000, "первая"),
+        TranscriptSegment(10_000, 40_000, "вторая"),
+        TranscriptSegment(40_000, 75_000, "третья"),
+    ]
+
+
+def test_snap_pulls_boundaries_onto_speech_edges() -> None:
+    from src.highlights import snap_to_speech
+
+    # Модель отдала окно, начинающееся и кончающееся посреди реплик.
+    rough = Highlight(15_000, 50_000, 0.9, "t", "r")
+
+    snapped = snap_to_speech(rough, _speech(), 20_000, 80_000)
+
+    assert snapped.start_ms == 10_000   # назад, к началу второй реплики
+    assert snapped.end_ms == 75_000     # вперёд, чтобы третья договорилась
+
+
+def test_snap_keeps_already_aligned_window() -> None:
+    from src.highlights import snap_to_speech
+
+    exact = Highlight(10_000, 40_000, 0.9, "t", "r")
+
+    assert snap_to_speech(exact, _speech(), 20_000, 60_000) == exact
+
+
+def test_snap_drops_window_that_grows_past_the_limit() -> None:
+    from src.highlights import snap_to_speech
+
+    rough = Highlight(15_000, 50_000, 0.9, "t", "r")
+
+    # После подтяжки окно станет 65 секунд — длиннее допустимого.
+    assert snap_to_speech(rough, _speech(), 20_000, 60_000) is None
+
+
+def test_snap_is_noop_without_transcript() -> None:
+    from src.highlights import snap_to_speech
+
+    rough = Highlight(15_000, 50_000, 0.9, "t", "r")
+
+    assert snap_to_speech(rough, [], 20_000, 60_000) == rough
+
+
+def test_find_highlights_returns_windows_aligned_to_speech(mocker) -> None:
+    import json as _json
+
+    _patch_post(mocker, _mock_response(
+        mocker, content=_json.dumps(_payload((15_000, 35_000, 0.9)))
+    ))
+
+    found = find_highlights(_speech(), 75_000, "key", min_seconds=20, max_seconds=60)
+
+    assert found[0].start_ms == 10_000
+    assert found[0].end_ms == 40_000

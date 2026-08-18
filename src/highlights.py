@@ -153,6 +153,41 @@ def render_transcript(segments: list[TranscriptSegment]) -> str:
     return "\n".join(f"[{s.start_ms}-{s.end_ms}] {s.text}" for s in segments)
 
 
+def snap_to_speech(
+    highlight: Highlight,
+    segments: list[TranscriptSegment],
+    min_ms: int,
+    max_ms: int,
+) -> Highlight | None:
+    """Двигает границы окна на края реплик транскрипта.
+
+    Просить об этом модель бесполезно: она промахивается тем чаще, чем дешевле,
+    а обрыв на середине фразы портит шортс сильнее, чем неидеальный выбор темы.
+    Здесь это делается детерминированно и от модели не зависит.
+
+    Возвращает None, если после подтяжки окно вышло за допустимую длительность.
+    """
+    if not segments:
+        return highlight
+
+    starts = sorted(s.start_ms for s in segments)
+    ends = sorted(s.end_ms for s in segments)
+
+    # Начало отводим назад, к началу реплики, внутри которой оно оказалось.
+    start = max((v for v in starts if v <= highlight.start_ms), default=starts[0])
+    # Конец — вперёд, чтобы фраза договорилась до конца.
+    end = min((v for v in ends if v >= highlight.end_ms), default=ends[-1])
+
+    if end <= start:
+        return None
+    if not min_ms <= end - start <= max_ms:
+        return None
+    return Highlight(
+        start_ms=start, end_ms=end, score=highlight.score,
+        title=highlight.title, reason=highlight.reason,
+    )
+
+
 def _drop_overlaps(highlights: list[Highlight]) -> list[Highlight]:
     """Пересекающиеся окна дали бы два шортса с одним и тем же куском.
     Идём по убыванию скора и оставляем непересекающиеся."""
@@ -167,7 +202,13 @@ def _drop_overlaps(highlights: list[Highlight]) -> list[Highlight]:
     return kept
 
 
-def _parse(payload: dict, source_duration_ms: int, min_ms: int, max_ms: int) -> list[Highlight]:
+def _parse(
+    payload: dict,
+    source_duration_ms: int,
+    min_ms: int,
+    max_ms: int,
+    segments: list[TranscriptSegment] | None = None,
+) -> list[Highlight]:
     found: list[Highlight] = []
     for raw in payload.get("highlights") or []:
         try:
@@ -178,17 +219,18 @@ def _parse(payload: dict, source_duration_ms: int, min_ms: int, max_ms: int) -> 
             continue
         if not min_ms <= end - start <= max_ms:
             continue
-        found.append(
-            Highlight(
-                start_ms=start,
-                end_ms=end,
-                # Схема structured outputs не поддерживает minimum/maximum,
-                # поэтому диапазон скора подрезаем здесь.
-                score=min(1.0, max(0.0, score)),
-                title=str(raw.get("title", "")).strip(),
-                reason=str(raw.get("reason", "")).strip(),
-            )
+        candidate = Highlight(
+            start_ms=start,
+            end_ms=end,
+            # Схема structured outputs не поддерживает minimum/maximum,
+            # поэтому диапазон скора подрезаем здесь.
+            score=min(1.0, max(0.0, score)),
+            title=str(raw.get("title", "")).strip(),
+            reason=str(raw.get("reason", "")).strip(),
         )
+        snapped = snap_to_speech(candidate, segments or [], min_ms, max_ms)
+        if snapped is not None:
+            found.append(snapped)
     return _drop_overlaps(found)
 
 
@@ -299,4 +341,4 @@ def find_highlights(
             f"Модель {payload.get('model')} вернула невалидный JSON: {text[:300]!r}"
         ) from exc
 
-    return _parse(parsed, source_duration_ms, min_ms, max_ms)[:max_count]
+    return _parse(parsed, source_duration_ms, min_ms, max_ms, segments)[:max_count]
