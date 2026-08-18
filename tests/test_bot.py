@@ -199,3 +199,35 @@ def test_upload_token_survives_malformed_key() -> None:
     from src.bot import upload_token
 
     assert upload_token("broken") == ""
+
+
+def test_delete_object_reports_success(mocker) -> None:
+    from src.bot import delete_object
+
+    client = mocker.Mock()
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert delete_object(_cfg(), "uploads/1/x/v.mp4") is True
+    assert client.delete_object.call_args.kwargs["Key"] == "uploads/1/x/v.mp4"
+
+
+def test_delete_object_reports_failure(mocker) -> None:
+    # Пометить строку удалённой, соврав про файл, хуже чем признать сбой.
+    from src.bot import delete_object
+
+    client = mocker.Mock()
+    client.delete_object.side_effect = RuntimeError("denied")
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    assert delete_object(_cfg(), "uploads/1/x/v.mp4") is False
+
+
+def test_delete_uses_the_uploads_bucket(mocker) -> None:
+    from src.bot import delete_object
+
+    client = mocker.Mock()
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    delete_object(_cfg(uploads_bucket="shortscutter"), "k")
+
+    assert client.delete_object.call_args.kwargs["Bucket"] == "shortscutter"

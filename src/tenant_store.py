@@ -165,6 +165,49 @@ class TenantStore:
             row = cur.fetchone()
         return bool(row) and row[0] == "uploaded" and row[1]
 
+    def source_for_user(self, source_id: int, user_id: int) -> tuple[str, str] | None:
+        """(ключ, статус) — но только если исходник принадлежит этому юзеру.
+
+        Идентификатор приходит из callback-кнопки, а её текст подделать
+        несложно: без проверки владельца чужую загрузку можно было бы удалить
+        или перезапустить.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT storage_key, status FROM sources WHERE id = %s AND user_id = %s",
+                (source_id, user_id),
+            )
+            row = cur.fetchone()
+        return (row[0], row[1]) if row else None
+
+    def mark_source_deleted(self, source_id: int) -> None:
+        """Строку оставляем: она нужна, чтобы ответить, что за видео это было.
+
+        Каскадное удаление унесло бы вместе с ней транскрипт, хайлайты и
+        историю задач — то есть ровно тот след, ради которого заведён аудит.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sources SET status = 'deleted', error = NULL WHERE id = %s",
+                (source_id,),
+            )
+            cur.execute("DELETE FROM schedules WHERE source_id = %s", (source_id,))
+        self.conn.commit()
+
+    def reset_for_rerun(self, source_id: int) -> None:
+        """Готовит исходник к повторной нарезке.
+
+        Старые хайлайты снимаем: они выбраны прежней моделью и прежним
+        промптом, а повторный прогон затевается как раз чтобы получить другие.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM highlights WHERE source_id = %s", (source_id,))
+            cur.execute(
+                "UPDATE sources SET status = 'uploaded', error = NULL WHERE id = %s",
+                (source_id,),
+            )
+        self.conn.commit()
+
     # --- transcript --------------------------------------------------------
 
     def save_transcript(self, source_id: int, segments: list[TranscriptSegment]) -> None:

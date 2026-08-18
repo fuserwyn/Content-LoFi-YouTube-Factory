@@ -164,6 +164,21 @@ def object_size(cfg: BotConfig, key: str) -> int:
         return 0
 
 
+def delete_object(cfg: BotConfig, key: str) -> bool:
+    """Удаляет исходник из хранилища. True, если объекта больше нет.
+
+    Чужое видео не должно лежать у нас дольше, чем нужно: это и деньги за
+    хранение, и лишняя ответственность при любом разбирательстве.
+    """
+    client = build_s3_client(cfg.s3)
+    try:
+        client.delete_object(Bucket=cfg.bucket_for_uploads, Key=key)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("не удалось удалить объект %s", key)
+        return False
+    return True
+
+
 def parse_cadence(text: str) -> int | None:
     """Разбирает «24», «24ч», «раз в 24 часа» — юзеры пишут по-разному."""
     digits = "".join(c for c in text if c.isdigit())
@@ -346,11 +361,11 @@ def build_dispatcher(cfg: BotConfig):
             with db.conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT s.id, s.status, s.created_at,
+                    SELECT s.id, s.status, s.duration_s,
                            count(j.id) FILTER (WHERE j.state = 'done')
                       FROM sources s
                       LEFT JOIN jobs j ON j.source_id = s.id
-                     WHERE s.user_id = %s
+                     WHERE s.user_id = %s AND s.status <> 'deleted'
                      GROUP BY s.id
                      ORDER BY s.created_at DESC
                      LIMIT 5
@@ -363,9 +378,79 @@ def build_dispatcher(cfg: BotConfig):
         if not rows:
             await message.answer("Загрузок пока нет. Начни с /upload.")
             return
-        lines = [
-            f"#{r[0]} — {r[1]}, готовых роликов: {r[3]}" for r in rows
-        ]
-        await message.answer("Последние загрузки:\n" + "\n".join(lines))
+
+        for source_id, status, duration_s, done in rows:
+            length = f", {duration_s // 60} мин" if duration_s else ""
+            await message.answer(
+                f"Загрузка #{source_id} — {status}{length}, готовых роликов: {done}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="Нарезать заново", callback_data=f"redo:{source_id}"
+                    ),
+                    InlineKeyboardButton(
+                        text="Удалить", callback_data=f"del:{source_id}"
+                    ),
+                ]]),
+            )
+
+    async def _owned_source(callback: CallbackQuery, source_id: int):
+        """Ключ исходника, если он принадлежит нажавшему кнопку.
+
+        callback_data приходит от клиента, а значит идентификатор в ней можно
+        подставить любой — без проверки владельца чужую загрузку удалили бы
+        по одной подделанной кнопке.
+        """
+        user_id = await in_db(
+            lambda db: db.upsert_user(callback.from_user.id, callback.from_user.username or "")
+        )
+        found = await in_db(lambda db: db.source_for_user(source_id, user_id))
+        if found is None:
+            await callback.answer("Загрузка не найдена", show_alert=True)
+            return None, None
+        return user_id, found[0]
+
+    @dp.callback_query(F.data.startswith("redo:"))
+    async def on_redo(callback: CallbackQuery) -> None:
+        source_id = int(callback.data.split(":", 1)[1])
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        # Файл могли удалить раньше: без проверки воркер взял бы задачу
+        # и упал на отсутствующем исходнике.
+        if await asyncio.to_thread(object_size, cfg, key) <= 0:
+            await callback.answer("Файла в хранилище больше нет", show_alert=True)
+            return
+
+        await in_db(lambda db: db.reset_for_rerun(source_id))
+        job_id = await in_db(lambda db: db.enqueue_job(user_id, source_id))
+        await in_db(
+            lambda db: db.log("source_rerun", user_id=user_id, entity="source",
+                              entity_id=source_id, meta={"job_id": job_id})
+        )
+        await callback.message.answer(
+            f"Поставил #{source_id} в очередь заново — пришлю новые ролики."
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("del:"))
+    async def on_delete(callback: CallbackQuery) -> None:
+        source_id = int(callback.data.split(":", 1)[1])
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        removed = await asyncio.to_thread(delete_object, cfg, key)
+        await in_db(lambda db: db.mark_source_deleted(source_id))
+        await in_db(
+            lambda db: db.log("source_deleted", user_id=user_id, entity="source",
+                              entity_id=source_id, meta={"removed": removed})
+        )
+        await callback.message.answer(
+            f"Удалил #{source_id} из хранилища."
+            if removed else
+            f"Пометил #{source_id} удалённой, но файл убрать не вышло — разберусь."
+        )
+        await callback.answer()
 
     return dp
