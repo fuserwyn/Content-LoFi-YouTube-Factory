@@ -171,3 +171,12 @@ def test_build_filter_crops_to_target_aspect() -> None:
     assert "scale=1080:1920:force_original_aspect_ratio=increase" in chain
     assert "crop=1080:1920" in chain
     assert "ass=" not in chain
+
+
+def test_filter_resets_pixel_aspect_ratio() -> None:
+    # Неквадратный SAR наследуется от исходника: кадр 1080x1920 отображается
+    # не как 9:16, и плеер тянет картинку — видео выглядит невертикальным.
+    chain = _build_filter(1080, 1920, 30, "")
+
+    assert "setsar=1" in chain
+    assert chain.index("crop=") < chain.index("setsar=1")

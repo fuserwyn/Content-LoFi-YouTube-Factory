@@ -228,6 +228,28 @@ def list_outputs(cfg: BotConfig, user_id: int, source_id: int) -> list[str]:
     return sorted(obj["Key"] for obj in response.get("Contents") or [])
 
 
+def list_uploads(cfg: BotConfig, user_id: int) -> list[tuple[str, int]]:
+    """(ключ, размер) загруженных этим юзером видео, свежие первыми.
+
+    Читаем хранилище, а не базу: юзер помнит файл по имени, под которым его
+    загрузил, а не по номеру строки.
+    """
+    client = build_s3_client(cfg.s3)
+    try:
+        response = client.list_objects_v2(
+            Bucket=cfg.bucket_for_uploads, Prefix=f"{cfg.upload_prefix}/{user_id}/"
+        )
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("не смог перечислить загрузки")
+        return []
+    items = [
+        (obj["Key"], int(obj.get("Size") or 0), obj.get("LastModified"))
+        for obj in response.get("Contents") or []
+    ]
+    items.sort(key=lambda x: x[2] or 0, reverse=True)
+    return [(key, size) for key, size, _ in items]
+
+
 def upload_output(cfg: BotConfig, path, key: str) -> bool:
     client = build_s3_client(cfg.s3)
     try:
@@ -362,6 +384,84 @@ def build_dispatcher(cfg: BotConfig):
         await message.answer(
             f"Буду искать до {value} фрагментов. Применится при следующем разборе."
         )
+
+    @dp.message(Command("videos"))
+    async def on_videos(message: Message) -> None:
+        user_id = await in_db(
+            lambda db: db.upsert_user(message.from_user.id, message.from_user.username or "")
+        )
+        found = await asyncio.to_thread(list_uploads, cfg, user_id)
+        if not found:
+            await message.answer("В хранилище пока нет твоих видео. Начни с /upload.")
+            return
+
+        rows = []
+        for key, size in found[:10]:
+            name = key.rsplit("/", 1)[-1]
+            token = upload_token(key)
+            rows.append([InlineKeyboardButton(
+                text=f"{name} · {size // 1048576} МБ"[:60],
+                callback_data=f"pick:{token}",
+            )])
+        await message.answer(
+            "Загруженные видео — выбери, какое разбирать:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    @dp.callback_query(F.data.startswith("pick:"))
+    async def on_pick(callback: CallbackQuery) -> None:
+        token = callback.data.split(":", 1)[1]
+        user_id = await in_db(
+            lambda db: db.upsert_user(callback.from_user.id, callback.from_user.username or "")
+        )
+
+        def find(db: TenantStore):
+            with db.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM sources WHERE storage_key LIKE %s AND user_id = %s",
+                    (f"%/{token}/%", user_id),
+                )
+                return cur.fetchone()
+
+        row = await in_db(find)
+        if row is None:
+            await callback.answer("Загрузка не найдена", show_alert=True)
+            return
+
+        source_id = row[0]
+        # Число фрагментов спрашиваем кнопками, а не текстом: на телефоне это
+        # одно нажатие вместо переключения на клавиатуру, а произвольное
+        # значение всё равно доступно через /count.
+        counts = [3, 5, 8, 12]
+        await callback.message.answer(
+            "На сколько фрагментов разбирать? Своё число — командой /count N.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=str(n), callback_data=f"go:{source_id}:{n}")
+                for n in counts
+            ]]),
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("go:"))
+    async def on_go(callback: CallbackQuery) -> None:
+        _, raw_source, raw_count = callback.data.split(":", 2)
+        source_id, count = int(raw_source), int(raw_count)
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        await in_db(lambda db: db.set_max_fragments(user_id, count))
+        await in_db(lambda db: db.reset_for_rerun(source_id))
+        job_id = await in_db(lambda db: db.enqueue_job(user_id, source_id))
+        await callback.message.answer(
+            f"Разбираю видео на {count} фрагментов. Распознавание речи идёт "
+            "несколько минут — пришлю список, как закончу."
+        )
+        await in_db(
+            lambda db: db.log("analyze_requested", user_id=user_id, entity="source",
+                              entity_id=source_id, meta={"job_id": job_id, "count": count})
+        )
+        await callback.answer()
 
     @dp.message(Command("upload"))
     async def on_upload(message: Message) -> None:
@@ -531,6 +631,7 @@ def build_dispatcher(cfg: BotConfig):
             await callback.answer("Файла в хранилище больше нет", show_alert=True)
             return
 
+        count = await in_db(lambda db: db.max_fragments(user_id))
         await in_db(lambda db: db.reset_for_rerun(source_id))
         job_id = await in_db(lambda db: db.enqueue_job(user_id, source_id))
         await in_db(
@@ -538,7 +639,8 @@ def build_dispatcher(cfg: BotConfig):
                               entity_id=source_id, meta={"job_id": job_id})
         )
         await callback.message.answer(
-            f"Поставил #{source_id} в очередь заново — пришлю новые ролики."
+            f"Разбираю #{source_id} заново на {count} фрагментов. "
+            "Распознавание идёт несколько минут — пришлю список, как закончу."
         )
         await callback.answer()
 
@@ -550,6 +652,8 @@ def build_dispatcher(cfg: BotConfig):
             return
 
         keys = await asyncio.to_thread(list_outputs, cfg, user_id, source_id)
+        # Транскрипт лежит рядом с роликами, но скачивать его юзеру незачем.
+        keys = [k for k in keys if not k.endswith(".json")]
         if not keys:
             await callback.answer("Готовых роликов пока нет", show_alert=True)
             return
@@ -587,6 +691,7 @@ def build_dispatcher(cfg: BotConfig):
             return
 
         keys = await asyncio.to_thread(list_outputs, cfg, user_id, source_id)
+        keys = [k for k in keys if not k.endswith(".json")]
         if not 0 <= index < len(keys):
             await callback.answer("Ролик больше не найден", show_alert=True)
             return
@@ -676,7 +781,14 @@ def build_dispatcher(cfg: BotConfig):
             lambda db: db.log("clip_requested", user_id=user_id, entity="highlight",
                               entity_id=highlight_id, meta={"job_id": job_id})
         )
-        await callback.answer("Режу — пришлю через пару минут")
+        # Всплывашка исчезает через секунду и не остаётся в переписке —
+        # юзер не помнит, что заказал. Дублируем сообщением.
+        await callback.message.answer(
+            f"Режу фрагмент {timecode(found.start_ms)}–{timecode(found.end_ms)}"
+            + (f" · {found.title}" if found.title else "")
+            + ". Пришлю через пару минут."
+        )
+        await callback.answer()
 
     @dp.callback_query(F.data.startswith("del:"))
     async def on_delete(callback: CallbackQuery) -> None:

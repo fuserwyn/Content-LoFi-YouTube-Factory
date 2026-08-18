@@ -40,6 +40,10 @@ def _build_filter(width: int, height: int, fps: int, ass_name: str) -> str:
     chain = [
         f"scale={width}:{height}:force_original_aspect_ratio=increase",
         f"crop={width}:{height}",
+        # Соотношение сторон пикселя наследуется от исходника. Если оно не
+        # единичное, кадр 1080x1920 отображается не как 9:16, и плеер тянет
+        # картинку — размер верный, а видео выглядит невертикальным.
+        "setsar=1",
         f"fps={fps}",
     ]
     if ass_name:

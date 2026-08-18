@@ -307,3 +307,35 @@ def test_timecode_is_shared_between_bot_and_worker() -> None:
 
     assert bot_timecode is worker_timecode
     assert bot_timecode(3_725_000) == "1:02:05"
+
+
+def test_uploads_are_listed_newest_first(mocker) -> None:
+    from datetime import datetime
+
+    from src.bot import list_uploads
+
+    client = mocker.Mock()
+    client.list_objects_v2.return_value = {"Contents": [
+        {"Key": "uploads/7/aaa/old.mp4", "Size": 100,
+         "LastModified": datetime(2026, 1, 1)},
+        {"Key": "uploads/7/bbb/new.mp4", "Size": 200,
+         "LastModified": datetime(2026, 6, 1)},
+    ]}
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    found = list_uploads(_cfg(), 7)
+
+    assert found[0][0].endswith("new.mp4")
+    assert found[0][1] == 200
+
+
+def test_uploads_are_scoped_to_the_user(mocker) -> None:
+    from src.bot import list_uploads
+
+    client = mocker.Mock()
+    client.list_objects_v2.return_value = {}
+    mocker.patch("src.bot.build_s3_client", return_value=client)
+
+    list_uploads(_cfg(), 7)
+
+    assert client.list_objects_v2.call_args.kwargs["Prefix"] == "uploads/7/"

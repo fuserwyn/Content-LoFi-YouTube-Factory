@@ -182,19 +182,35 @@ def clip_caption(highlight: Highlight, index: int) -> str:
     return "\n".join(parts)
 
 
-def send_clip(cfg: BotConfig, chat_id: int, path: Path, caption: str) -> None:
+def send_clip(
+    cfg: BotConfig, chat_id: int, path: Path, caption: str,
+    width: int = DEFAULT_WIDTH, height: int = DEFAULT_HEIGHT, duration_s: int = 0,
+) -> None:
     """Отправляет ролик как видео, а не документ — так он играет прямо в чате.
+
+    Размеры передаём явно: без них Telegram рисует превью по своей догадке, и
+    вертикальный ролик может показаться горизонтальным ещё до воспроизведения.
 
     Своя отправка, а не notify_telegram: тот шлёт документом и приписывает к
     подписи «clip 1/1», что для одиночного ролика выглядит мусором.
     """
     import requests
 
+    payload = {
+        "chat_id": chat_id,
+        "caption": caption[:1024],
+        "supports_streaming": "true",
+        "width": width,
+        "height": height,
+    }
+    if duration_s:
+        payload["duration"] = duration_s
+
     try:
         with path.open("rb") as handle:
             requests.post(
                 f"https://api.telegram.org/bot{cfg.token}/sendVideo",
-                data={"chat_id": chat_id, "caption": caption[:1024], "supports_streaming": "true"},
+                data=payload,
                 files={"video": (path.name, handle, "video/mp4")},
                 timeout=300,
             )
@@ -387,7 +403,10 @@ def render_one(
 
         key = f"{output_prefix(job.user_id, job.source_id)}{mark}.mp4"
         upload_output(cfg, clip.path, key)
-        send_clip(cfg, tg_chat_id, clip.path, clip_caption(highlight, 1))
+        send_clip(
+            cfg, tg_chat_id, clip.path, clip_caption(highlight, 1),
+            duration_s=highlight.duration_ms // 1000,
+        )
 
     db.finish_job(job.id, output_key=key)
     db.log("clip_rendered", user_id=job.user_id, entity="highlight",
