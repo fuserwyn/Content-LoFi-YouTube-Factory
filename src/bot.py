@@ -37,6 +37,9 @@ SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 UPLOAD_URL_TTL_SECONDS = 6 * 3600
 
+MIN_FRAGMENTS = 1
+MAX_FRAGMENTS = 20
+
 MIN_CADENCE_HOURS = 1
 MAX_CADENCE_HOURS = 24 * 7
 
@@ -46,7 +49,8 @@ WELCOME = (
     "1. /upload — дам ссылку для загрузки\n"
     "2. загружаешь файл по ссылке\n"
     "3. подтверждаешь, что видео твоё\n"
-    "4. присылаю готовые вертикальные ролики с субтитрами\n\n"
+    "4. выбираешь нужные из списка — присылаю готовые ролики\n\n"
+    "/count N — сколько фрагментов искать (сейчас 5)\n"
     "Загружать можно только свой контент или тот, на который есть лицензия."
 )
 
@@ -331,6 +335,34 @@ def build_dispatcher(cfg: BotConfig):
         )
         await message.answer(WELCOME)
 
+    @dp.message(Command("count"))
+    async def on_count(message: Message) -> None:
+        user_id = await in_db(
+            lambda db: db.upsert_user(message.from_user.id, message.from_user.username or "")
+        )
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            current = await in_db(lambda db: db.max_fragments(user_id))
+            await message.answer(
+                f"Сейчас ищу до {current} фрагментов. Поменять: /count 8 "
+                f"(от {MIN_FRAGMENTS} до {MAX_FRAGMENTS})."
+            )
+            return
+
+        digits = "".join(c for c in parts[1] if c.isdigit())
+        value = int(digits) if digits else 0
+        if not MIN_FRAGMENTS <= value <= MAX_FRAGMENTS:
+            await message.answer(
+                f"Нужно число от {MIN_FRAGMENTS} до {MAX_FRAGMENTS}. "
+                "Больше двадцати на одном видео уже не находится."
+            )
+            return
+
+        await in_db(lambda db: db.set_max_fragments(user_id, value))
+        await message.answer(
+            f"Буду искать до {value} фрагментов. Применится при следующем разборе."
+        )
+
     @dp.message(Command("upload"))
     async def on_upload(message: Message) -> None:
         user_id = await in_db(
@@ -596,9 +628,31 @@ def build_dispatcher(cfg: BotConfig):
                 callback_data=f"cut:{source_id}:{highlight_id}",
             )])
 
+        rows.append([InlineKeyboardButton(
+            text=f"Нарезать все ({len(stored)})", callback_data=f"cutall:{source_id}"
+        )])
         await callback.message.answer(
             "\n".join(lines)[:4000],
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("cutall:"))
+    async def on_cut_all(callback: CallbackQuery) -> None:
+        source_id = int(callback.data.split(":", 1)[1])
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        stored = await in_db(lambda db: db.highlights_for_source(source_id))
+        for highlight_id, _ in stored:
+            await in_db(
+                lambda db, hid=highlight_id: db.enqueue_job(
+                    user_id, source_id, highlight_id=hid
+                )
+            )
+        await callback.message.answer(
+            f"Поставил в очередь {len(stored)} роликов — пришлю по мере готовности."
         )
         await callback.answer()
 

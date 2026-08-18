@@ -97,6 +97,19 @@ class TenantStore:
                 )
         self.conn.commit()
 
+    def max_fragments(self, user_id: int) -> int:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT max_fragments FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+        return int(row[0]) if row and row[0] else 5
+
+    def set_max_fragments(self, user_id: int, value: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET max_fragments = %s WHERE id = %s", (value, user_id)
+            )
+        self.conn.commit()
+
     def is_active(self, user_id: int) -> bool:
         with self.conn.cursor() as cur:
             cur.execute("SELECT status FROM users WHERE id = %s", (user_id,))

@@ -291,7 +291,9 @@ def analyze_source(
             whisper_model=settings.whisper_model,
             whisper_download_root=settings.whisper_download_root,
             language=settings.language,
-            max_count=settings.max_shorts,
+            # Сколько фрагментов искать — решает юзер; настройка воркера
+            # остаётся потолком на случай, если в базе её ещё нет.
+            max_count=db.max_fragments(job.user_id) or settings.max_shorts,
             min_seconds=settings.min_seconds,
             max_seconds=settings.max_seconds,
             # Ничего не режем: юзер сначала смотрит список.
@@ -358,8 +360,16 @@ def render_one(
         if clip_words:
             ass_text = build_ass(clip_words, DEFAULT_WIDTH, DEFAULT_HEIGHT)
         elif not words:
-            # Транскрипт не нашёлся — режем без субтитров, но говорим об этом.
+            # Транскрипт сохраняется при разборе; у фрагментов, отобранных
+            # прежней версией, его нет. Молча отдать ролик без субтитров —
+            # значит выдать поломку за норму, поэтому говорим прямо.
             LOGGER.warning("WORKER: транскрипт недоступен, режу без субтитров")
+            notify_text(
+                cfg, tg_chat_id,
+                "У этой загрузки не сохранён транскрипт, поэтому ролик будет "
+                "без субтитров. Нажми «Разобрать заново» — после этого субтитры "
+                "появятся.",
+            )
 
         mark = timecode_mark(highlight.start_ms)
         clip = cut_short(
