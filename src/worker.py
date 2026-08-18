@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .bot import BotConfig, load_bot_config
-from .notify_telegram import send_files_to_telegram
+from .highlights import Highlight
 from .remote_assets import build_s3_client
 from .shorts_cut import ShortClip
 from .shorts_pipeline import build_shorts
@@ -71,9 +71,8 @@ def load_worker_settings() -> WorkerSettings:
 def notify_text(cfg: BotConfig, chat_id: int, text: str) -> None:
     """Текстовое сообщение юзеру.
 
-    ``send_files_to_telegram`` умеет только файлы и при пустом списке молча
-    выходит — а объяснить, почему роликов не будет, обязательно: иначе юзер
-    видит тишину и считает, что сервис сломался.
+    Объяснить, почему роликов не будет, обязательно: иначе юзер видит тишину
+    и считает, что сервис сломался.
     """
     import requests
 
@@ -85,6 +84,53 @@ def notify_text(cfg: BotConfig, chat_id: int, text: str) -> None:
         )
     except requests.RequestException as exc:
         LOGGER.warning("WORKER: не смог отправить сообщение юзеру: %s", exc)
+
+
+def timecode(ms: int) -> str:
+    """Позиция в исходнике как ЧЧ:ММ:СС — юзеру нужно уметь найти это место."""
+    total = ms // 1000
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def clip_caption(highlight: Highlight, index: int) -> str:
+    """Подпись к ролику: откуда вырезано, о чём и почему выбрано.
+
+    Без таймкода юзер не может ни проверить выбор, ни вернуться к этому месту
+    в исходнике; без обоснования — не понимает логику отбора и не может
+    сказать нам, где она промахивается.
+    """
+    span = f"{timecode(highlight.start_ms)}–{timecode(highlight.end_ms)}"
+    seconds = highlight.duration_ms // 1000
+    parts = [f"#{index} · {span} ({seconds} с)"]
+    if highlight.title:
+        parts.append(highlight.title)
+    if highlight.reason:
+        parts.append(highlight.reason)
+    return "\n".join(parts)
+
+
+def send_clip(cfg: BotConfig, chat_id: int, path: Path, caption: str) -> None:
+    """Отправляет ролик как видео, а не документ — так он играет прямо в чате.
+
+    Своя отправка, а не notify_telegram: тот шлёт документом и приписывает к
+    подписи «clip 1/1», что для одиночного ролика выглядит мусором.
+    """
+    import requests
+
+    try:
+        with path.open("rb") as handle:
+            requests.post(
+                f"https://api.telegram.org/bot{cfg.token}/sendVideo",
+                data={"chat_id": chat_id, "caption": caption[:1024], "supports_streaming": "true"},
+                files={"video": (path.name, handle, "video/mp4")},
+                timeout=300,
+            )
+    except requests.RequestException as exc:
+        LOGGER.warning("WORKER: не смог отправить ролик: %s", exc)
 
 
 def download_source(cfg: BotConfig, key: str, dest: Path) -> Path:
@@ -130,17 +176,12 @@ def process_job(
         source = download_source(cfg, storage_key, tmp_dir / Path(storage_key).name)
         db.set_source_status(job.source_id, "transcribing")
 
-        def deliver(clip: ShortClip) -> None:
+        def deliver(clip: ShortClip, highlight: Highlight) -> None:
             nonlocal delivered
             # Отдаём по мере готовности: если рендер упадёт на пятом ролике,
             # первые четыре у юзера уже будут.
-            send_files_to_telegram(
-                bot_token=cfg.token,
-                chat_id=str(tg_chat_id),
-                file_paths=[clip.path],
-                caption_prefix="Шортс готов",
-            )
             delivered += 1
+            send_clip(cfg, tg_chat_id, clip.path, clip_caption(highlight, delivered))
 
         result = build_shorts(
             source,
@@ -176,6 +217,17 @@ def process_job(
                 "Речь распозналась, но подходящих фрагментов не нашлось. "
                 "Обычно так бывает на очень коротких видео — попробуй запись подлиннее.",
             )
+
+        if delivered:
+            # Сводка одним сообщением: по ней видно всю раскладку сразу,
+            # не пролистывая ролики по одному.
+            lines = [f"Готово: {delivered} роликов из {result.source_duration_ms // 60000} мин"]
+            lines += [
+                f"  {i}. {timecode(h.start_ms)}–{timecode(h.end_ms)}"
+                + (f" · {h.title}" if h.title else "")
+                for i, h in enumerate(result.highlights[:delivered], start=1)
+            ]
+            notify_text(cfg, tg_chat_id, "\n".join(lines))
 
         db.set_source_status(job.source_id, "ready")
         db.finish_job(job.id, output_key=f"{storage_key}#shorts")

@@ -49,8 +49,16 @@ def _result(*, speech=True, clips=1, highlights=1) -> PipelineResult:
 
 def _wire(mocker, result: PipelineResult):
     mocker.patch("src.worker.download_source", return_value=Path("/tmp/src.mp4"))
-    mocker.patch("src.worker.build_shorts", return_value=result)
-    send = mocker.patch("src.worker.send_files_to_telegram")
+    def fake_build(*_a, on_clip_ready=None, **_kw):
+        # Настоящий build_shorts зовёт колбэк на каждый готовый клип —
+        # без этого воркер считает, что не отдал ничего.
+        if on_clip_ready is not None:
+            for clip, highlight in zip(result.clips, result.highlights):
+                on_clip_ready(clip, highlight)
+        return result
+
+    mocker.patch("src.worker.build_shorts", side_effect=fake_build)
+    send = mocker.patch("src.worker.send_clip")
     notify = mocker.patch("src.worker.notify_text")
     db = mocker.MagicMock()
     db.conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (
@@ -165,3 +173,52 @@ def test_worker_id_is_unique_per_process(mocker) -> None:
     mocker.patch.dict("os.environ", {"RAILWAY_REPLICA_ID": ""}, clear=False)
 
     assert load_worker_settings().worker_id != load_worker_settings().worker_id
+
+
+def test_timecode_formats_minutes_and_hours() -> None:
+    from src.worker import timecode
+
+    assert timecode(0) == "0:00"
+    assert timecode(75_000) == "1:15"
+    assert timecode(3_725_000) == "1:02:05"
+
+
+def test_caption_carries_source_position() -> None:
+    # Без таймкода юзер не может ни проверить выбор, ни найти это место
+    # в исходнике.
+    from src.worker import clip_caption
+
+    caption = clip_caption(Highlight(75_000, 105_000, 0.9, "Заголовок", "Почему цепляет"), 2)
+
+    assert "1:15–1:45" in caption
+    assert "#2" in caption
+    assert "30 с" in caption
+    assert "Заголовок" in caption
+    assert "Почему цепляет" in caption
+
+
+def test_caption_survives_missing_title_and_reason() -> None:
+    from src.worker import clip_caption
+
+    caption = clip_caption(Highlight(0, 30_000, 0.5, "", ""), 1)
+
+    assert "0:00–0:30" in caption
+
+
+def test_clips_are_sent_with_their_timecodes(mocker) -> None:
+    db, send, _ = _wire(mocker, _result())
+
+    process_job(_job(), db, _cfg(), _settings())
+
+    caption = send.call_args[0][3]
+    assert "0:00–0:25" in caption
+
+
+def test_summary_lists_every_timecode(mocker) -> None:
+    db, _, notify = _wire(mocker, _result(clips=1, highlights=1))
+
+    process_job(_job(), db, _cfg(), _settings())
+
+    summary = notify.call_args[0][2]
+    assert "Готово: 1" in summary
+    assert "0:00–0:25" in summary

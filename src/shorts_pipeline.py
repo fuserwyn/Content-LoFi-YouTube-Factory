@@ -70,12 +70,14 @@ def build_shorts(
     encode_preset: str = DEFAULT_PRESET,
     crf: int = DEFAULT_CRF,
     burn_subtitles: bool = True,
-    on_clip_ready: Callable[[ShortClip], None] | None = None,
+    on_clip_ready: Callable[[ShortClip, Highlight], None] | None = None,
 ) -> PipelineResult:
     """Транскрибирует исходник, отбирает хайлайты и режет их в вертикальные клипы.
 
     ``on_clip_ready`` вызывается после каждого готового клипа — чтобы бот отдавал
-    юзеру первый шортс, не дожидаясь, пока досчитаются остальные.
+    юзеру первый шортс, не дожидаясь, пока досчитаются остальные. Вместе с
+    клипом передаётся хайлайт: в нём границы, заголовок и обоснование, без
+    которых юзеру непонятно, откуда взялся фрагмент.
     """
     duration_ms = int(probe_duration_seconds(source_path) * 1000)
     result = PipelineResult(source_duration_ms=duration_ms)
@@ -123,6 +125,6 @@ def build_shorts(
         )
         result.clips.append(clip)
         if on_clip_ready is not None:
-            on_clip_ready(clip)
+            on_clip_ready(clip, highlight)
 
     return result
