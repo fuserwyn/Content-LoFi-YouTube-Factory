@@ -286,3 +286,14 @@ def test_upload_output_reports_failure(mocker) -> None:
     mocker.patch("src.bot.build_s3_client", return_value=client)
 
     assert upload_output(_cfg(), "/tmp/x.mp4", "outputs/1/1/01.mp4") is False
+
+
+def test_timecode_mark_matches_between_writer_and_reader() -> None:
+    # Ролик именует воркер, а сопоставляет бот — метка должна совпадать,
+    # иначе к клипу подпишется чужой заголовок.
+    from src.bot import timecode_mark
+    from src.worker import timecode
+
+    assert timecode_mark(192_000) == "3-12"
+    assert timecode(192_000) == "3:12"
+    assert timecode_mark(3_725_000) == "1-02-05"

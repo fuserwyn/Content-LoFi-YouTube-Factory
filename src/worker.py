@@ -24,7 +24,13 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from .bot import BotConfig, load_bot_config, output_prefix, upload_output
+from .bot import (
+    BotConfig,
+    load_bot_config,
+    output_prefix,
+    timecode_mark,
+    upload_output,
+)
 from .highlights import Highlight
 from .remote_assets import build_s3_client
 from .shorts_cut import ShortClip
@@ -185,7 +191,7 @@ def process_job(
             # Копия в хранилище — чтобы отдать оригинал ссылкой: Telegram
             # пережимает видео при отправке, а ролик пойдёт в публикацию.
             # Имя несёт таймкод, поэтому скачанный файл понятен без чата.
-            mark = timecode(highlight.start_ms).replace(":", "-")
+            mark = timecode_mark(highlight.start_ms)
             key = f"{output_prefix(job.user_id, job.source_id)}{delivered:02d}_{mark}.mp4"
             upload_output(cfg, clip.path, key)
 

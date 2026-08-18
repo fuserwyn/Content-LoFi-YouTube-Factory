@@ -187,6 +187,20 @@ def presigned_download_url(cfg: BotConfig, key: str) -> str:
     )
 
 
+def timecode_mark(ms: int) -> str:
+    """Метка времени в имени файла: ``3-12`` для 3:12.
+
+    Двоеточие в ключе объекта неудобно, поэтому дефис — но по этой же метке
+    ролик потом сопоставляется со своим фрагментом.
+    """
+    total = ms // 1000
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours}-{minutes:02d}-{seconds:02d}"
+    return f"{minutes}-{seconds:02d}"
+
+
 def list_outputs(cfg: BotConfig, user_id: int, source_id: int) -> list[str]:
     """Ключи готовых роликов по порядку. Пустой список, если их ещё нет."""
     client = build_s3_client(cfg.s3)
@@ -484,7 +498,7 @@ def build_dispatcher(cfg: BotConfig):
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("dl:"))
-    async def on_download(callback: CallbackQuery) -> None:
+    async def on_download_list(callback: CallbackQuery) -> None:
         source_id = int(callback.data.split(":", 1)[1])
         user_id, key = await _owned_source(callback, source_id)
         if key is None:
@@ -495,16 +509,48 @@ def build_dispatcher(cfg: BotConfig):
             await callback.answer("Готовых роликов пока нет", show_alert=True)
             return
 
-        # Ссылки выписываем в момент нажатия: выданные заранее протухли бы
-        # раньше, чем юзер до них добрался.
-        links = []
-        for index, obj_key in enumerate(keys, start=1):
-            url = await asyncio.to_thread(presigned_download_url, cfg, obj_key)
-            links.append(f"{index}. {obj_key.rsplit('/', 1)[-1]}\n{url}")
+        highlights = await in_db(lambda db: db.highlights_for_source(source_id))
+        # Ролики нумеруются по убыванию скора, а фрагменты в базе лежат по
+        # времени, поэтому сопоставляем их по метке в имени файла, а не по
+        # порядку — иначе к ролику подписался бы чужой заголовок.
+        by_mark = {timecode_mark(h.start_ms): h for h in highlights}
+
+        rows = []
+        for index, obj_key in enumerate(keys):
+            name = obj_key.rsplit("/", 1)[-1]
+            mark = name.split("_", 1)[-1].removesuffix(".mp4")
+            found = by_mark.get(mark)
+            label = mark.replace("-", ":", 1).replace("-", ":")
+            if found and found.title:
+                label = f"{label} · {found.title}"
+            rows.append([InlineKeyboardButton(
+                text=label[:60], callback_data=f"one:{source_id}:{index}"
+            )])
 
         await callback.message.answer(
-            "Оригиналы без сжатия Telegram, ссылки действуют сутки:\n\n"
-            + "\n\n".join(links),
+            "Выбери ролик — пришлю ссылку на оригинал без сжатия:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("one:"))
+    async def on_download_one(callback: CallbackQuery) -> None:
+        _, raw_source, raw_index = callback.data.split(":", 2)
+        source_id, index = int(raw_source), int(raw_index)
+        user_id, key = await _owned_source(callback, source_id)
+        if key is None:
+            return
+
+        keys = await asyncio.to_thread(list_outputs, cfg, user_id, source_id)
+        if not 0 <= index < len(keys):
+            await callback.answer("Ролик больше не найден", show_alert=True)
+            return
+
+        # Ссылку подписываем в момент нажатия: выданная заранее протухла бы
+        # раньше, чем юзер до неё добрался.
+        url = await asyncio.to_thread(presigned_download_url, cfg, keys[index])
+        await callback.message.answer(
+            f"{keys[index].rsplit('/', 1)[-1]} — ссылка действует сутки:\n{url}",
             disable_web_page_preview=True,
         )
         await callback.answer()

@@ -267,6 +267,25 @@ class TenantStore:
                 )
         self.conn.commit()
 
+    def highlights_for_source(self, source_id: int) -> list[Highlight]:
+        """Все отобранные фрагменты — для показа юзеру списком."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT start_ms, end_ms, score, title, reason
+                  FROM highlights
+                 WHERE source_id = %s
+                 ORDER BY start_ms
+                """,
+                (source_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            Highlight(start_ms=r[0], end_ms=r[1], score=float(r[2]),
+                      title=r[3] or "", reason=r[4] or "")
+            for r in rows
+        ]
+
     def take_next_highlight(self, source_id: int) -> tuple[int, Highlight] | None:
         """Забирает лучший неиспользованный хайлайт и сразу помечает его.
 
