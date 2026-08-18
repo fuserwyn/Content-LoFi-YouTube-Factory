@@ -114,13 +114,17 @@ def test_build_shorts_reports_each_clip_as_it_lands(tmp_path: Path, mocker) -> N
         Highlight(30_000, 55_000, 0.7, "b", "r"),
     ]
     _wire(mocker, highlights=highlights)
-    seen: list[ShortClip] = []
+    seen: list[tuple] = []
 
     build_shorts(
-        tmp_path / "src.mp4", tmp_path / "out", on_clip_ready=seen.append
+        tmp_path / "src.mp4", tmp_path / "out",
+        on_clip_ready=lambda clip, highlight: seen.append((clip, highlight)),
     )
 
     assert len(seen) == 2
+    # Вместе с клипом приходит хайлайт: в нём границы и обоснование,
+    # без которых подпись к ролику собрать не из чего.
+    assert seen[0][1] is highlights[0]
 
 
 def test_build_shorts_transcribes_once_for_both_uses(tmp_path: Path, mocker) -> None:
