@@ -129,3 +129,17 @@ def test_cue_of_only_punctuation_is_dropped() -> None:
     words = [Word(0, 100, ","), Word(200, 300, "—")]
 
     assert group_words(words) == []
+
+
+def test_no_cue_opens_with_a_comma_however_whisper_splits_it() -> None:
+    # Три способа, которыми Whisper отдаёт запятую на границе фразы. Ни один
+    # не должен оставить её в начале реплики — это читается как обрывок.
+    variants = [
+        [Word(0, 100, ","), Word(120, 600, "миллионов."), Word(650, 1000, "У")],
+        [Word(0, 600, ",миллионов."), Word(650, 1000, "У")],
+        [Word(0, 500, "десять,"), Word(520, 900, "миллионов.")],
+    ]
+
+    for words in variants:
+        for cue in group_words(words):
+            assert not cue.text.lstrip().startswith(",")
