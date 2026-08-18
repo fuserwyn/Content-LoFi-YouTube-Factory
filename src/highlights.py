@@ -153,6 +153,45 @@ def render_transcript(segments: list[TranscriptSegment]) -> str:
     return "\n".join(f"[{s.start_ms}-{s.end_ms}] {s.text}" for s in segments)
 
 
+# Реплика, оканчивающаяся одним из этих знаков, договорила мысль до конца —
+# именно на такой границе и должен обрываться шортс, а не на союзе или запятой.
+SENTENCE_END_PUNCT = ".!?…"
+
+
+def _ends_a_sentence(text: str) -> bool:
+    stripped = text.rstrip()
+    return bool(stripped) and stripped[-1] in SENTENCE_END_PUNCT
+
+
+def _resolve_sentence_end(
+    start: int, end: int, ordered_segments: list[TranscriptSegment], max_ms: int
+) -> int:
+    """Подтягивает конец окна к ближайшей завершённой мысли.
+
+    Сначала пробует досказать её вперёд — оборванный на середине шортс
+    выглядит хуже, чем чуть более длинный. Если договорить вышло бы за
+    max_ms, откатывается назад к последней уже законченной фразе. Если ни
+    впереди, ни позади законченной фразы нет (например, ASR не расставил
+    знаки препинания), конец остаётся как был — это не хуже прежнего.
+    """
+    for seg in ordered_segments:
+        if seg.end_ms < end:
+            continue
+        if seg.end_ms - start > max_ms:
+            break
+        if _ends_a_sentence(seg.text):
+            return seg.end_ms
+
+    finished_before = [
+        seg.end_ms for seg in ordered_segments
+        if seg.end_ms <= end and _ends_a_sentence(seg.text)
+    ]
+    if finished_before:
+        return finished_before[-1]
+
+    return end
+
+
 def snap_to_speech(
     highlight: Highlight,
     segments: list[TranscriptSegment],
@@ -170,8 +209,9 @@ def snap_to_speech(
     if not segments:
         return highlight
 
-    starts = sorted(s.start_ms for s in segments)
-    ends = sorted(s.end_ms for s in segments)
+    ordered = sorted(segments, key=lambda s: s.start_ms)
+    starts = [s.start_ms for s in ordered]
+    ends = [s.end_ms for s in ordered]
 
     # Начало отводим назад, к началу реплики, внутри которой оно оказалось.
     start = max((v for v in starts if v <= highlight.start_ms), default=starts[0])
@@ -180,6 +220,9 @@ def snap_to_speech(
 
     if end <= start:
         return None
+
+    end = _resolve_sentence_end(start, end, ordered, max_ms)
+
     if not min_ms <= end - start <= max_ms:
         return None
     return Highlight(

@@ -310,6 +310,59 @@ def test_snap_is_noop_without_transcript() -> None:
     assert snap_to_speech(rough, [], 20_000, 60_000) == rough
 
 
+def _unfinished_speech() -> list[TranscriptSegment]:
+    # "и вот" не договаривает мысль — реплика обрывается на союзе, а
+    # следующая её договаривает точкой.
+    return [
+        TranscriptSegment(0, 10_000, "первая."),
+        TranscriptSegment(10_000, 20_000, "и вот"),
+        TranscriptSegment(20_000, 30_000, "мы пришли."),
+        TranscriptSegment(30_000, 70_000, "четвёртая."),
+    ]
+
+
+def test_snap_extends_end_to_finish_an_unfinished_sentence() -> None:
+    from src.highlights import snap_to_speech
+
+    # Окно кончается ровно на границе реплики, но та не договорила мысль.
+    rough = Highlight(5_000, 20_000, 0.9, "t", "r")
+
+    snapped = snap_to_speech(rough, _unfinished_speech(), 5_000, 30_000)
+
+    assert snapped.end_ms == 30_000  # дотянуто до конца "мы пришли."
+
+
+def test_snap_falls_back_to_earlier_sentence_when_finishing_is_too_long() -> None:
+    from src.highlights import snap_to_speech
+
+    rough = Highlight(5_000, 20_000, 0.9, "t", "r")
+
+    # max_ms не пускает дотянуть до 30_000 (25 c от start=5_000 это предел).
+    snapped = snap_to_speech(rough, _unfinished_speech(), 5_000, 15_000)
+
+    assert snapped.end_ms == 10_000  # откат к концу "первая."
+
+
+def test_snap_leaves_already_finished_sentence_untouched() -> None:
+    from src.highlights import snap_to_speech
+
+    exact = Highlight(0, 10_000, 0.9, "t", "r")
+
+    assert snap_to_speech(exact, _unfinished_speech(), 5_000, 60_000) == exact
+
+
+def test_snap_keeps_original_end_when_transcript_has_no_punctuation() -> None:
+    from src.highlights import snap_to_speech
+
+    # Ни одна реплика во всём транскрипте не оканчивается точкой — нечего
+    # искать, конец остаётся тем же, что дала обычная подтяжка к речи.
+    rough = Highlight(15_000, 50_000, 0.9, "t", "r")
+
+    snapped = snap_to_speech(rough, _speech(), 20_000, 80_000)
+
+    assert snapped.end_ms == 75_000
+
+
 def test_find_highlights_returns_windows_aligned_to_speech(mocker) -> None:
     import json as _json
 
