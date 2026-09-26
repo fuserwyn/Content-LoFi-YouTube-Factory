@@ -81,3 +81,14 @@ def test_load_config_rejects_invalid_run_mode(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ValueError):
         load_config()
+
+
+def test_n8n_short_queue_dir_defaults_to_data_dir_and_can_be_overridden(tmp_path) -> None:
+    from dataclasses import replace
+
+    from tests.test_trigger_server import _make_test_config
+
+    config = _make_test_config(tmp_path)
+    assert config.n8n_short_queue_dir == config.data_dir
+    moved = replace(config, n8n_short_queue_dir_override=tmp_path / "vol" / "shorts")
+    assert moved.n8n_short_queue_dir == tmp_path / "vol" / "shorts"

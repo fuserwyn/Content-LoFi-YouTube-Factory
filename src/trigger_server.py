@@ -978,7 +978,7 @@ def start_trigger_server(config: AppConfig) -> None:
         provided_key = x_trigger_key or ""
         if config.trigger_api_key and provided_key != config.trigger_api_key:
             raise HTTPException(status_code=401, detail="unauthorized")
-        return peek_next_job(config.data_dir, config.n8n_short_publish_gap_ms)
+        return peek_next_job(config.n8n_short_queue_dir, config.n8n_short_publish_gap_ms)
 
     @app.post("/workflow/n8n-short-publish-ack")
     def n8n_short_publish_ack(x_trigger_key: str | None = Header(default=None)) -> dict:
@@ -986,7 +986,7 @@ def start_trigger_server(config: AppConfig) -> None:
         provided_key = x_trigger_key or ""
         if config.trigger_api_key and provided_key != config.trigger_api_key:
             raise HTTPException(status_code=401, detail="unauthorized")
-        return ack_publish(config.data_dir, config.n8n_short_publish_gap_ms)
+        return ack_publish(config.n8n_short_queue_dir, config.n8n_short_publish_gap_ms)
 
     @app.post("/run")
     def run_now(payload: RunRequest, x_trigger_key: str | None = Header(default=None)) -> dict:
@@ -1166,7 +1166,7 @@ def start_trigger_server(config: AppConfig) -> None:
             )
 
             persist_queue_after_render(
-                config.data_dir,
+                config.n8n_short_queue_dir,
                 workflow_result,
                 config.n8n_short_publish_gap_ms,
             )

@@ -104,6 +104,12 @@ class AppConfig:
     # Cut shorts sequentially by track length (clip_seconds each); drop a tail shorter than min.
     shorts_split_by_track_length: bool = False
     shorts_min_tail_seconds: int = 25
+    # Where the n8n shorts queue lives; point it at a volume so redeploys don't wipe it.
+    n8n_short_queue_dir_override: Path | None = None
+
+    @property
+    def n8n_short_queue_dir(self) -> Path:
+        return self.n8n_short_queue_dir_override or self.data_dir
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -348,4 +354,9 @@ def load_config() -> AppConfig:
         publish_main_video=_parse_bool("PUBLISH_MAIN_VIDEO", True),
         shorts_split_by_track_length=_parse_bool("SHORTS_SPLIT_BY_TRACK_LENGTH", False),
         shorts_min_tail_seconds=max(1, int(os.getenv("SHORTS_MIN_TAIL_SECONDS", "25").strip() or "25")),
+        n8n_short_queue_dir_override=(
+            Path(os.environ["N8N_SHORT_QUEUE_DIR"].strip())
+            if os.getenv("N8N_SHORT_QUEUE_DIR", "").strip()
+            else None
+        ),
     )
