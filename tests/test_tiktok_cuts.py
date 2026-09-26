@@ -11,6 +11,7 @@ from src.tiktok_cuts import (
     _probe_media_duration_seconds,
     _render_one_clip,
     create_tiktok_cuts,
+    track_length_segments,
 )
 
 
@@ -523,3 +524,61 @@ def test_choose_track_start_second_three_clips_offsets_from_track() -> None:
     assert _choose_track_start_second(120, 30, clip_index=0, total_clips=3) == 0
     assert _choose_track_start_second(120, 30, clip_index=1, total_clips=3) == 60
     assert _choose_track_start_second(120, 30, clip_index=2, total_clips=3) == 90
+
+
+@pytest.mark.parametrize(
+    ("track_seconds", "expected"),
+    [
+        (123, [(0, 30), (30, 30), (60, 30), (90, 30)]),  # 2:03 -> 4x30, 3s tail dropped
+        (117, [(0, 30), (30, 30), (60, 30), (90, 27)]),  # 1:57 -> 3x30 + 27
+        (114, [(0, 30), (30, 30), (60, 30)]),  # 1:54 -> 24s tail < 25 dropped
+        (115, [(0, 30), (30, 30), (60, 30), (90, 25)]),  # exactly 25s tail is kept
+        (120, [(0, 30), (30, 30), (60, 30), (90, 30)]),
+        (20, []),
+    ],
+)
+def test_track_length_segments(track_seconds: int, expected: list[tuple[int, int]]) -> None:
+    assert (
+        track_length_segments(track_duration_seconds=track_seconds, clip_seconds=30, min_tail_seconds=25)
+        == expected
+    )
+
+
+def test_create_tiktok_cuts_split_by_track_length(tmp_path: Path, mocker) -> None:
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"v")
+    track = tmp_path / "t.mp3"
+    track.write_bytes(b"t")
+    out = tmp_path / "out"
+
+    mocker.patch(
+        "src.tiktok_cuts._probe_media_duration_seconds",
+        side_effect=lambda path: 117 if path in (src, track) else 1,
+    )
+    mock_render = mocker.patch("src.tiktok_cuts._render_one_clip")
+
+    results = create_tiktok_cuts(
+        source_video_path=src,
+        tracks_dir=tmp_path / "ignored_tracks",
+        output_dir=out,
+        clips_count=3,
+        clip_seconds=30,
+        width=1080,
+        height=1920,
+        fps=30,
+        encode_preset="veryfast",
+        crf=23,
+        fixed_track_for_audio=track,
+        split_track_by_length=True,
+        min_tail_seconds=25,
+    )
+
+    assert len(results) == 4
+    calls = [c.kwargs for c in mock_render.call_args_list]
+    assert [(c["start_second"], c["duration_second"]) for c in calls] == [(0, 30), (30, 30), (60, 30), (90, 27)]
+    assert [(c["track_start_second"], c["audio_decode_seconds"]) for c in calls] == [
+        (0, 30),
+        (30, 30),
+        (60, 30),
+        (90, 27),
+    ]

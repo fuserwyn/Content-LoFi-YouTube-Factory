@@ -29,7 +29,7 @@ from .notify_telegram import send_files_to_telegram, send_message_to_telegram
 from .video_generation import generate_external_video
 from .select_track import SUPPORTED_EXTENSIONS
 from .tiktok_cuts import TikTokClipResult, create_tiktok_cuts
-from .upload_youtube import upload_video
+from .upload_youtube import UploadResult, upload_video
 from .n8n_short_queue import ack_publish, peek_next_job, persist_queue_after_render
 from .youtube_oauth_health import probe_all_profiles, probe_config_profile, _profile_dict
 from .youtube_oauth_store import oauth_status, save_refresh_token, token_store_path
@@ -161,6 +161,13 @@ class RunPublishWithShortsRequest(BaseModel):
     short_interval_hours: int = 48
     short_publish_offset_hours: list[float] | None = Field(default_factory=lambda: [12.0, 24.0, 36.0])
     shorts_use_main_track_thirds: bool = True
+    publish_main_video: bool | None = Field(
+        default=None, description="None -> PUBLISH_MAIN_VIDEO env; false = shorts only"
+    )
+    shorts_split_by_track_length: bool | None = Field(
+        default=None,
+        description="None -> SHORTS_SPLIT_BY_TRACK_LENGTH env; true = clip_seconds pieces of the whole track",
+    )
     main_privacy_status: str = "public"
     shorts_privacy_status: str = "public"
     cleanup_source_after_publish: bool = True
@@ -390,7 +397,7 @@ def workflow_render_main_and_cut_shorts_impl(
     bundle: PexelsRenderBundle,
     payload: RunPublishWithShortsRequest,
 ) -> dict[str, Any]:
-    """Рендер уже сделан: залить только long, нарезать шорты на диск, без загрузки шортов (n8n шлёт /workflow/publish-short)."""
+    """Рендер уже сделан: залить long (если не shorts-only), нарезать шорты на диск, без загрузки шортов (n8n шлёт /workflow/publish-short)."""
     source_video_path = bundle.render_result.output_path
     tracks_dir = _resolve_tracks_dir(payload.tracks_dir, config)
     output_dir = _resolve_path(payload.output_dir, config.tiktok_output_dir)
@@ -400,18 +407,116 @@ def workflow_render_main_and_cut_shorts_impl(
     tags_seed = payload.tags or config.content_tags
     track_path_meta = bundle.selected_track
     main_meta = generate_metadata(track_path_meta, tags_seed, theme=payload.theme)
+    publish_main = config.publish_main_video if payload.publish_main_video is None else payload.publish_main_video
+    split_by_track = (
+        config.shorts_split_by_track_length
+        if payload.shorts_split_by_track_length is None
+        else payload.shorts_split_by_track_length
+    )
     logger.info(
-        "WORKFLOW: render-main-and-shorts | out=%s track=%s shorts_count=%s",
+        "WORKFLOW: render-main-and-shorts | out=%s track=%s shorts_count=%s publish_main=%s split_by_track=%s",
         source_video_path,
         track_path_meta,
-        shorts_count,
+        "by_track_length" if split_by_track else shorts_count,
+        publish_main,
+        split_by_track,
     )
+    main_upload: UploadResult | None = None
+    if publish_main:
+        main_upload = _upload_main_for_workflow(
+            config=config,
+            payload=payload,
+            source_video_path=source_video_path,
+            main_meta=main_meta,
+            publish_base=publish_base,
+        )
+    else:
+        logger.info("WORKFLOW: main video upload skipped (shorts-only mode)")
+
+    fixed_track_audio: Path | None = None
+    slice_track_parts = False
+    if payload.shorts_use_main_track_thirds or split_by_track:
+        fixed_track_audio = track_path_meta
+        slice_track_parts = not split_by_track
+
+    shorts = create_tiktok_cuts(
+        source_video_path=source_video_path,
+        tracks_dir=tracks_dir,
+        output_dir=output_dir,
+        clips_count=shorts_count,
+        clip_seconds=max(5, clip_seconds),
+        width=config.tiktok_width,
+        height=config.tiktok_height,
+        fps=config.fps,
+        encode_preset=config.render_preset,
+        crf=config.render_crf,
+        clip_min_seconds=max(5, payload.clip_min_seconds) if payload.clip_min_seconds is not None else None,
+        clip_max_seconds=max(5, payload.clip_max_seconds) if payload.clip_max_seconds is not None else None,
+        fixed_track_for_audio=fixed_track_audio,
+        slice_track_into_equal_parts=slice_track_parts,
+        split_track_by_length=split_by_track,
+        min_tail_seconds=config.shorts_min_tail_seconds,
+    )
+    shorts_files: list[dict[str, Any]] = []
+    for idx, short in enumerate(shorts):
+        shorts_files.append(
+            {
+                "index": idx,
+                "path": str(short.output_path.resolve()),
+                "start_second": short.start_second,
+                "duration_second": short.duration_second,
+            }
+        )
+
+    if main_upload is not None and config.telegram_bot_token and config.telegram_chat_id:
+        youtube_url = f"https://www.youtube.com/watch?v={main_upload.video_id}"
+        send_message_to_telegram(
+            bot_token=config.telegram_bot_token,
+            chat_id=config.telegram_chat_id,
+            message=youtube_url,
+        )
+
+    if payload.cleanup_source_after_publish:
+        source_video_path.unlink(missing_ok=True)
+
+    return {
+        "status": "ok",
+        "message": (
+            "main uploaded; short files created (upload via /workflow/publish-short from n8n)"
+            if main_upload is not None
+            else "shorts-only: main not uploaded; short files created (upload via /workflow/publish-short from n8n)"
+        ),
+        "main_video": {
+            "video_id": main_upload.video_id if main_upload is not None else "",
+            "status": main_upload.status if main_upload is not None else "skipped",
+            "path": str(source_video_path) if source_video_path.exists() else "",
+        },
+        "selected_track": str(bundle.selected_track),
+        "main_meta": {
+            "title": main_meta.title,
+            "description": main_meta.description,
+            "tags": list(main_meta.tags),
+        },
+        "shorts_files": shorts_files,
+        "shorts_privacy_status": payload.shorts_privacy_status,
+        "cleanup_shorts_after_upload": payload.cleanup_shorts_after_upload,
+    }
+
+
+def _upload_main_for_workflow(
+    *,
+    config: AppConfig,
+    payload: RunPublishWithShortsRequest,
+    source_video_path: Path,
+    main_meta: VideoMeta,
+    publish_base: datetime,
+) -> UploadResult:
     try:
         yt_refresh = resolve_youtube_refresh_token(config, payload.youtube_oauth_profile)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    main_upload = upload_video(
+    return upload_video(
         video_path=source_video_path,
         meta=main_meta,
         client_id=config.youtube_client_id,
@@ -431,68 +536,6 @@ def workflow_render_main_and_cut_shorts_impl(
         primary_refresh_token=config.youtube_refresh_token,
         fallback_to_primary_on_error=config.youtube_upload_fallback_to_primary,
     )
-    fixed_track_audio: Path | None = None
-    slice_track_parts = False
-    if payload.shorts_use_main_track_thirds:
-        fixed_track_audio = track_path_meta
-        slice_track_parts = True
-
-    shorts = create_tiktok_cuts(
-        source_video_path=source_video_path,
-        tracks_dir=tracks_dir,
-        output_dir=output_dir,
-        clips_count=shorts_count,
-        clip_seconds=max(5, clip_seconds),
-        width=config.tiktok_width,
-        height=config.tiktok_height,
-        fps=config.fps,
-        encode_preset=config.render_preset,
-        crf=config.render_crf,
-        clip_min_seconds=max(5, payload.clip_min_seconds) if payload.clip_min_seconds is not None else None,
-        clip_max_seconds=max(5, payload.clip_max_seconds) if payload.clip_max_seconds is not None else None,
-        fixed_track_for_audio=fixed_track_audio,
-        slice_track_into_equal_parts=slice_track_parts,
-    )
-    shorts_files: list[dict[str, Any]] = []
-    for idx, short in enumerate(shorts):
-        shorts_files.append(
-            {
-                "index": idx,
-                "path": str(short.output_path.resolve()),
-                "start_second": short.start_second,
-                "duration_second": short.duration_second,
-            }
-        )
-
-    if config.telegram_bot_token and config.telegram_chat_id:
-        youtube_url = f"https://www.youtube.com/watch?v={main_upload.video_id}"
-        send_message_to_telegram(
-            bot_token=config.telegram_bot_token,
-            chat_id=config.telegram_chat_id,
-            message=youtube_url,
-        )
-
-    if payload.cleanup_source_after_publish:
-        source_video_path.unlink(missing_ok=True)
-
-    return {
-        "status": "ok",
-        "message": "main uploaded; short files created (upload via /workflow/publish-short from n8n)",
-        "main_video": {
-            "video_id": main_upload.video_id,
-            "status": main_upload.status,
-            "path": str(source_video_path) if source_video_path.exists() else "",
-        },
-        "selected_track": str(bundle.selected_track),
-        "main_meta": {
-            "title": main_meta.title,
-            "description": main_meta.description,
-            "tags": list(main_meta.tags),
-        },
-        "shorts_files": shorts_files,
-        "shorts_privacy_status": payload.shorts_privacy_status,
-        "cleanup_shorts_after_upload": payload.cleanup_shorts_after_upload,
-    }
 
 
 def workflow_publish_short_impl(

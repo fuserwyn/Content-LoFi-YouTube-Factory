@@ -99,6 +99,11 @@ class AppConfig:
     minimax_poll_interval_seconds: int
     minimax_max_wait_seconds: int
     n8n_short_publish_gap_ms: int
+    # Shorts-only mode: render the long video as the shorts source but don't upload it.
+    publish_main_video: bool = True
+    # Cut shorts sequentially by track length (clip_seconds each); drop a tail shorter than min.
+    shorts_split_by_track_length: bool = False
+    shorts_min_tail_seconds: int = 25
 
 
 def _require_env(name: str, default: str | None = None) -> str:
@@ -340,4 +345,7 @@ def load_config() -> AppConfig:
             1_000,
             int((os.getenv("N8N_SHORT_PUBLISH_GAP_MS") or str(12 * 60 * 60 * 1000)).strip()),
         ),
+        publish_main_video=_parse_bool("PUBLISH_MAIN_VIDEO", True),
+        shorts_split_by_track_length=_parse_bool("SHORTS_SPLIT_BY_TRACK_LENGTH", False),
+        shorts_min_tail_seconds=max(1, int(os.getenv("SHORTS_MIN_TAIL_SECONDS", "25").strip() or "25")),
     )

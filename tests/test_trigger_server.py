@@ -938,3 +938,75 @@ def test_run_publish_with_shorts_calls_render_then_publish(tmp_path: Path, mocke
     publish_kw = mock_publish.call_args.kwargs["payload"]
     assert publish_kw.source_video_path == str(main_mp4)
     assert publish_kw.track_for_metadata == str(track_mp3)
+
+
+def _workflow_bundle(tmp_path: Path) -> Mock:
+    main_mp4 = tmp_path / "renders" / "final.mp4"
+    main_mp4.parent.mkdir(parents=True, exist_ok=True)
+    main_mp4.write_bytes(b"video")
+    track_mp3 = tmp_path / "tracks" / "track.mp3"
+    track_mp3.parent.mkdir(parents=True, exist_ok=True)
+    track_mp3.write_bytes(b"audio")
+    bundle = Mock()
+    bundle.render_result = Mock(output_path=main_mp4)
+    bundle.selected_track = track_mp3
+    return bundle
+
+
+def test_workflow_shorts_only_skips_main_upload_and_splits_by_track(tmp_path: Path, mocker) -> None:
+    from src.trigger_server import RunPublishWithShortsRequest, workflow_render_main_and_cut_shorts_impl
+    from src.tiktok_cuts import TikTokClipResult
+
+    config = _make_test_config(tmp_path)
+    config.publish_main_video = False
+    config.shorts_split_by_track_length = True
+    bundle = _workflow_bundle(tmp_path)
+
+    mock_upload = mocker.patch("src.trigger_server.upload_video")
+    mock_cuts = mocker.patch(
+        "src.trigger_server.create_tiktok_cuts",
+        return_value=[
+            TikTokClipResult(tmp_path / f"s{i}.mp4", bundle.selected_track, i * 30, 30) for i in range(4)
+        ],
+    )
+
+    result = workflow_render_main_and_cut_shorts_impl(
+        config=config,
+        logger=Mock(),
+        bundle=bundle,
+        payload=RunPublishWithShortsRequest(shorts_count=3, clip_seconds=30),
+    )
+
+    mock_upload.assert_not_called()
+    kw = mock_cuts.call_args.kwargs
+    assert kw["split_track_by_length"] is True
+    assert kw["slice_track_into_equal_parts"] is False
+    assert kw["fixed_track_for_audio"] == bundle.selected_track
+    assert kw["min_tail_seconds"] == 25
+    assert result["main_video"]["video_id"] == ""
+    assert result["main_video"]["status"] == "skipped"
+    assert len(result["shorts_files"]) == 4
+
+
+def test_workflow_default_still_uploads_main(tmp_path: Path, mocker) -> None:
+    from src.trigger_server import RunPublishWithShortsRequest, workflow_render_main_and_cut_shorts_impl
+
+    config = _make_test_config(tmp_path)
+    bundle = _workflow_bundle(tmp_path)
+    mocker.patch("src.trigger_server.resolve_youtube_refresh_token", return_value="tok")
+    mock_upload = mocker.patch(
+        "src.trigger_server.upload_video", return_value=Mock(video_id="main1", status="public")
+    )
+    mock_cuts = mocker.patch("src.trigger_server.create_tiktok_cuts", return_value=[])
+
+    result = workflow_render_main_and_cut_shorts_impl(
+        config=config,
+        logger=Mock(),
+        bundle=bundle,
+        payload=RunPublishWithShortsRequest(shorts_count=3, clip_seconds=30),
+    )
+
+    mock_upload.assert_called_once()
+    assert mock_cuts.call_args.kwargs["split_track_by_length"] is False
+    assert mock_cuts.call_args.kwargs["slice_track_into_equal_parts"] is True
+    assert result["main_video"]["video_id"] == "main1"

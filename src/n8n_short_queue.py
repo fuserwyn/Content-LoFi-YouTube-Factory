@@ -18,6 +18,9 @@ logger = logging.getLogger("content_factory")
 _QUEUE_FILE = "n8n_short_publish_queue.json"
 _LOCK_FILE = "n8n_short_publish_queue.lock"
 _PUBLISH_LOCK_MS = 15 * 60 * 1000
+# n8n polls hourly and the gap starts at ack (a few minutes after the poll), so without slack
+# every publish would slip to the next poll (+1h per short). Capped at gap/4 for short test gaps.
+_DEADLINE_SLACK_MS = 15 * 60 * 1000
 
 
 def _queue_path(data_dir: Path) -> Path:
@@ -72,27 +75,39 @@ def persist_queue_after_render(data_dir: Path, workflow_result: dict[str, Any], 
     for i, s in enumerate(shorts_files):
         if isinstance(s, dict) and s.get("path"):
             shorts.append({"path": str(s["path"]), "index": int(s.get("index", i))})
-    state = {
-        "version": 1,
-        "main_meta": {
-            "title": main_meta.get("title") or "",
-            "description": main_meta.get("description") or "",
-            "tags": list(main_meta.get("tags") or [])
-            if isinstance(main_meta.get("tags"), list)
-            else [],
-        },
-        "shorts": shorts,
-        "next_publish_after_ms": now + gap if shorts else None,
-        "publish_lock_ms": None,
-    }
+    main_uploaded = bool((workflow_result.get("main_video") or {}).get("video_id"))
     with _file_lock(data_dir):
+        last_published_ms = _read_last_published_ms(_queue_path(data_dir))
+        if not shorts:
+            first_publish_ms = None
+        elif main_uploaded:
+            first_publish_ms = now + gap
+        elif last_published_ms is None:
+            first_publish_ms = now
+        else:
+            # Shorts-only: keep the cadence across tracks — next short is one gap after the previous one.
+            first_publish_ms = max(now, last_published_ms + gap)
+        state = {
+            "version": 1,
+            "main_meta": {
+                "title": main_meta.get("title") or "",
+                "description": main_meta.get("description") or "",
+                "tags": list(main_meta.get("tags") or [])
+                if isinstance(main_meta.get("tags"), list)
+                else [],
+            },
+            "shorts": shorts,
+            "next_publish_after_ms": first_publish_ms,
+            "publish_lock_ms": None,
+            "last_published_ms": last_published_ms,
+        }
         _atomic_write(_queue_path(data_dir), json.dumps(state, ensure_ascii=False))
     gap_h = gap / 3_600_000
     logger.info(
         "WORKFLOW: n8n short publish queue persisted | shorts=%d gap_ms=%d (~%.2fh) "
         "next_publish_after_ms=%s | GET n8n-short-publish-next returns ready=false "
         "(before_deadline) until then. Cron frequency does not shorten this gap. "
-        "Интервал задаётся N8N_SHORT_PUBLISH_GAP_MS (прод 43200000 = 12 ч; тест 60000).",
+        "Интервал задаётся N8N_SHORT_PUBLISH_GAP_MS (shorts-only 1/день: 86400000; тест 60000).",
         len(shorts),
         gap,
         gap_h,
@@ -102,6 +117,16 @@ def persist_queue_after_render(data_dir: Path, workflow_result: dict[str, Any], 
         logger.warning(
             "WORKFLOW: n8n short publish queue empty (no shorts in render result; check cuts / shorts_count)"
         )
+
+
+def _read_last_published_ms(path: Path) -> int | None:
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")).get("last_published_ms")
+        return int(raw) if raw is not None else None
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def _peek_envelope(payload: dict[str, Any]) -> dict[str, Any]:
@@ -116,7 +141,7 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
 
     No in-flight mutation: n8n may retry peek until POST publish-short + ack succeed.
     """
-    _ = gap_ms
+    slack_ms = min(_DEADLINE_SLACK_MS, max(0, gap_ms) // 4)
     with _file_lock(data_dir):
         path = _queue_path(data_dir)
         if not path.is_file():
@@ -137,7 +162,7 @@ def peek_next_job(data_dir: Path, gap_ms: int) -> dict[str, Any]:
             return _peek_envelope({"ready": False, "reason": "queue_empty"})
 
         next_after = state.get("next_publish_after_ms")
-        if next_after is not None and now < int(next_after):
+        if next_after is not None and now < int(next_after) - slack_ms:
             w = int(next_after) - now
             logger.debug("n8n short queue peek: before_deadline wait_ms=%s", w)
             return _peek_envelope(
@@ -192,6 +217,7 @@ def ack_publish(data_dir: Path, gap_ms: int) -> dict[str, Any]:
         state["shorts"] = shorts
         state["publish_lock_ms"] = None
         now = _now_ms()
+        state["last_published_ms"] = now
         if shorts:
             state["next_publish_after_ms"] = now + gap
         else:

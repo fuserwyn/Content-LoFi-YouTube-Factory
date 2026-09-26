@@ -22,6 +22,7 @@ def test_persist_peek_ack_flow(data_dir: Path) -> None:
     gap = 60_000
     wf = {
         "main_meta": {"title": "T", "description": "D", "tags": ["a"]},
+        "main_video": {"video_id": "main123"},
         "shorts_files": [
             {"path": "/tmp/s0.mp4", "index": 0},
             {"path": "/tmp/s1.mp4", "index": 1},
@@ -65,3 +66,48 @@ def test_persist_peek_ack_flow(data_dir: Path) -> None:
     assert a2["ok"] is True
     assert a2["remaining"] == 0
     assert a2["all_shorts_done"] is True
+
+
+def _shorts_only_result(paths: list[str]) -> dict:
+    return {
+        "main_meta": {"title": "T", "description": "D", "tags": []},
+        "main_video": {"video_id": "", "status": "skipped"},
+        "shorts_files": [{"path": p, "index": i} for i, p in enumerate(paths)],
+    }
+
+
+def test_shorts_only_first_track_publishes_right_away(data_dir: Path) -> None:
+    persist_queue_after_render(data_dir, _shorts_only_result(["/tmp/a0.mp4"]), 86_400_000)
+    r = peek_next_job(data_dir, 86_400_000)
+    assert r["ready"] is True
+    assert r["publishBody"]["short_path"] == "/tmp/a0.mp4"
+
+
+def test_shorts_only_next_track_keeps_daily_cadence(data_dir: Path) -> None:
+    gap = 86_400_000
+    persist_queue_after_render(data_dir, _shorts_only_result(["/tmp/a0.mp4"]), gap)
+    assert peek_next_job(data_dir, gap)["ready"] is True
+    before_ack = int(time.time() * 1000)
+    assert ack_publish(data_dir, gap)["all_shorts_done"] is True
+
+    # Next track rendered right after — its first short must still wait a day after the last publish.
+    persist_queue_after_render(data_dir, _shorts_only_result(["/tmp/b0.mp4", "/tmp/b1.mp4"]), gap)
+    state = json.loads((data_dir / "n8n_short_publish_queue.json").read_text(encoding="utf-8"))
+    assert int(state["next_publish_after_ms"]) >= before_ack + gap
+    assert peek_next_job(data_dir, gap)["reason"] == "before_deadline"
+
+
+def test_peek_allows_publish_slightly_before_deadline(data_dir: Path) -> None:
+    """Hourly cron at 17:00 must not miss a deadline of 17:04 (gap counted from the previous ack)."""
+    gap = 86_400_000
+    persist_queue_after_render(data_dir, _shorts_only_result(["/tmp/a0.mp4"]), gap)
+    path = data_dir / "n8n_short_publish_queue.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["next_publish_after_ms"] = int(time.time() * 1000) + 4 * 60 * 1000
+    path.write_text(json.dumps(state), encoding="utf-8")
+    assert peek_next_job(data_dir, gap)["ready"] is True
+
+    state["publish_lock_ms"] = None
+    state["next_publish_after_ms"] = int(time.time() * 1000) + 60 * 60 * 1000
+    path.write_text(json.dumps(state), encoding="utf-8")
+    assert peek_next_job(data_dir, gap)["reason"] == "before_deadline"

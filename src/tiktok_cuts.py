@@ -30,6 +30,26 @@ def _equal_segment_audio_window(
     return lo, audio_take
 
 
+def track_length_segments(
+    *,
+    track_duration_seconds: int,
+    clip_seconds: int,
+    min_tail_seconds: int,
+) -> list[tuple[int, int]]:
+    """Consecutive [start, duration) pieces of the track: full clip_seconds pieces, plus the tail
+    only if it is at least min_tail_seconds long (123s/30 -> 4 shorts, 117s -> 3x30+27, 114s -> 3)."""
+    clip = max(1, clip_seconds)
+    segments: list[tuple[int, int]] = []
+    start = 0
+    while start < track_duration_seconds:
+        duration = min(clip, track_duration_seconds - start)
+        if duration < clip and duration < min_tail_seconds:
+            break
+        segments.append((start, duration))
+        start += duration
+    return segments
+
+
 @dataclass
 class TikTokClipResult:
     output_path: Path
@@ -54,12 +74,16 @@ def create_tiktok_cuts(
     on_clip_ready: Callable[[TikTokClipResult], None] | None = None,
     fixed_track_for_audio: Path | None = None,
     slice_track_into_equal_parts: bool = False,
+    split_track_by_length: bool = False,
+    min_tail_seconds: int = 25,
 ) -> list[TikTokClipResult]:
     if not source_video_path.exists():
         raise RuntimeError(f"TikTok source video not found: {source_video_path}")
 
     if slice_track_into_equal_parts and fixed_track_for_audio is None:
         raise RuntimeError("slice_track_into_equal_parts requires fixed_track_for_audio")
+    if split_track_by_length and fixed_track_for_audio is None:
+        raise RuntimeError("split_track_by_length requires fixed_track_for_audio")
 
     if fixed_track_for_audio is not None:
         if not fixed_track_for_audio.exists():
@@ -75,13 +99,30 @@ def create_tiktok_cuts(
     if source_duration is None:
         raise RuntimeError(f"Unable to probe source duration for TikTok cuts: {source_video_path}")
 
-    timeline = _build_timeline(
-        duration_seconds=source_duration,
-        clips_count=clips_count,
-        clip_seconds=clip_seconds,
-        clip_min_seconds=clip_min_seconds,
-        clip_max_seconds=clip_max_seconds,
-    )
+    track_segments: list[tuple[int, int]] | None = None
+    if split_track_by_length:
+        assert fixed_track_for_audio is not None
+        track_duration_total = _probe_media_duration_seconds(fixed_track_for_audio)
+        if track_duration_total is None:
+            raise RuntimeError(f"Unable to probe track duration for shorts: {fixed_track_for_audio}")
+        track_segments = track_length_segments(
+            track_duration_seconds=track_duration_total,
+            clip_seconds=clip_seconds,
+            min_tail_seconds=min_tail_seconds,
+        )
+        # The main render follows the track, so video and audio share the same offset;
+        # clamp only if the render came out shorter than the track.
+        timeline = [
+            (max(0, min(start, source_duration - duration)), duration) for start, duration in track_segments
+        ]
+    else:
+        timeline = _build_timeline(
+            duration_seconds=source_duration,
+            clips_count=clips_count,
+            clip_seconds=clip_seconds,
+            clip_min_seconds=clip_min_seconds,
+            clip_max_seconds=clip_max_seconds,
+        )
     shuffled_tracks = tracks[:]
     if fixed_track_for_audio is None:
         random.shuffle(shuffled_tracks)
@@ -95,7 +136,9 @@ def create_tiktok_cuts(
             track_durations_cache[track_path] = _probe_media_duration_seconds(track_path)
         track_duration = track_durations_cache[track_path]
         audio_decode_seconds: int | None = None
-        if fixed_track_for_audio is not None and slice_track_into_equal_parts:
+        if track_segments is not None:
+            track_start_second, audio_decode_seconds = track_segments[index]
+        elif fixed_track_for_audio is not None and slice_track_into_equal_parts:
             track_start_second, audio_decode_seconds = _equal_segment_audio_window(
                 track_duration_seconds=track_duration,
                 clip_index=index,
