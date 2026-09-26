@@ -390,6 +390,10 @@ def publish_main_and_shorts_impl(
     }
 
 
+def _publish_main_enabled(config: AppConfig, payload: RunPublishWithShortsRequest) -> bool:
+    return config.publish_main_video if payload.publish_main_video is None else payload.publish_main_video
+
+
 def workflow_render_main_and_cut_shorts_impl(
     *,
     config: AppConfig,
@@ -407,7 +411,7 @@ def workflow_render_main_and_cut_shorts_impl(
     tags_seed = payload.tags or config.content_tags
     track_path_meta = bundle.selected_track
     main_meta = generate_metadata(track_path_meta, tags_seed, theme=payload.theme)
-    publish_main = config.publish_main_video if payload.publish_main_video is None else payload.publish_main_video
+    publish_main = _publish_main_enabled(config, payload)
     split_by_track = (
         config.shorts_split_by_track_length
         if payload.shorts_split_by_track_length is None
@@ -1157,6 +1161,12 @@ def start_trigger_server(config: AppConfig) -> None:
                 effective_tags=effective_tags,
                 preferred_track=payload.track,
                 allow_recent_preferred=payload.allow_recent_preferred,
+                # Shorts-only: the render is just the shorts source, so make it vertical up front.
+                render_size=(
+                    None
+                    if _publish_main_enabled(config, payload)
+                    else (config.tiktok_width, config.tiktok_height)
+                ),
             )
             workflow_result = workflow_render_main_and_cut_shorts_impl(
                 config=config,

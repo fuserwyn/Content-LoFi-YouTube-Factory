@@ -7,7 +7,7 @@ import random
 import subprocess
 from typing import Callable
 
-from .ffmpeg_utils import finalize_ffmpeg_command
+from .ffmpeg_utils import cover_scale_filter, finalize_ffmpeg_command
 from .select_track import SUPPORTED_EXTENSIONS
 
 
@@ -301,7 +301,7 @@ def _render_one_clip(
         str(source_video_path),
         *audio_opts,
         "-vf",
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps}",
+        cover_scale_filter(width, height, fps),
         "-map",
         "0:v:0",
         "-map",

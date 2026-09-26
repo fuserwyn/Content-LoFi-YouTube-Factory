@@ -9,7 +9,7 @@ import shutil
 import subprocess
 
 from .fetch_assets import ClipAsset
-from .ffmpeg_utils import finalize_ffmpeg_command
+from .ffmpeg_utils import cover_scale_filter, finalize_ffmpeg_command
 
 LOGGER = logging.getLogger("content_factory")
 FFMPEG_TIME_RE = re.compile(r"time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
@@ -96,7 +96,7 @@ def render_video_with_ffmpeg(
                 "-i",
                 str(segment.clip.local_path),
                 "-vf",
-                f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps}",
+                cover_scale_filter(width, height, fps),
                 "-an",
                 "-c:v",
                 "libx264",

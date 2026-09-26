@@ -59,3 +59,13 @@ def finalize_ffmpeg_command(command: list[str]) -> list[str]:
     out = list(command)
     out[-1:-1] = ["-threads", str(_render_threads())]
     return [*_nice_prefix(), *out]
+
+
+def cover_scale_filter(width: int, height: int, fps: int) -> str:
+    """Fill width x height, cropping the excess. Crops to the target aspect at source
+    resolution first, then scales — scale-then-crop would build an upscaled frame
+    (1920x1080 -> 3413x1920 for vertical) and hold it in memory for every frame."""
+    return (
+        f"crop='min(iw,ih*{width}/{height})':'min(ih,iw*{height}/{width})',"
+        f"scale={width}:{height},setsar=1,fps={fps}"
+    )

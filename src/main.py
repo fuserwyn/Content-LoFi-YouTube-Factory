@@ -155,6 +155,7 @@ def render_pexels_track_bundle(
     effective_tags: list[str],
     preferred_track: str | None,
     allow_recent_preferred: bool,
+    render_size: tuple[int, int] | None = None,
 ) -> PexelsRenderBundle:
     """Fetch clips (Pexels or local/S3 batch), pick track, render final MP4 — shared by CLI run and webhook."""
     # Tracks: mirror from R2. Videos: batch-download only what this run needs (not the whole library).
@@ -284,18 +285,22 @@ def render_pexels_track_bundle(
         raise RuntimeError("No valid clips available from local source videos or Pexels.")
 
     no_repeat = True if force_no_repeat else config.no_repeat_clips_in_single_video
+    # Source clips are still filtered by TARGET_WIDTH/HEIGHT; render_size only changes the output frame.
+    render_width, render_height = render_size or (config.target_width, config.target_height)
     logger.info(
-        "RENDER: composing final video with FFmpeg | clips=%d no_repeat=%s",
+        "RENDER: composing final video with FFmpeg | clips=%d no_repeat=%s size=%dx%d",
         len(clips),
         no_repeat,
+        render_width,
+        render_height,
     )
     render_result = render_video_with_ffmpeg(
         clips=clips,
         track_path=selected_track,
         output_dir=config.temp_renders_dir,
         target_duration_seconds=target_duration_seconds,
-        width=config.target_width,
-        height=config.target_height,
+        width=render_width,
+        height=render_height,
         fps=config.fps,
         encode_preset=config.render_preset,
         crf=config.render_crf,

@@ -420,3 +420,11 @@ def test_render_video_with_ffmpeg_strict_mode_insufficient_clips(tmp_path: Path,
             no_repeat_clips_in_single_video=True,
             allow_shorter_unique_video=False,
         )
+
+
+def test_cover_scale_filter_crops_before_scaling() -> None:
+    from src.ffmpeg_utils import cover_scale_filter
+
+    vf = cover_scale_filter(1080, 1920, 30)
+    assert vf.index("crop=") < vf.index("scale=1080:1920")
+    assert "force_original_aspect_ratio" not in vf
