@@ -230,3 +230,17 @@ def test_download_source_video_batch_accepts_portrait_and_landscape(tmp_path: Pa
     assert sorted(markers) == ["landscape.mp4", "portrait.mp4"]
     assert {(c.width, c.height) for c in clips} == {(1080, 1920), (1920, 1080)}
     assert not (tmp_path / "videos" / "small_portrait.mp4").exists()
+
+
+def test_build_source_video_queue_newest_unused_first() -> None:
+    remote = [
+        RemoteObject(key="source_videos/a.mp4", filename="a.mp4", size=1, last_modified=100),
+        RemoteObject(key="source_videos/b.mp4", filename="b.mp4", size=1, last_modified=300),
+        RemoteObject(key="source_videos/c.mp4", filename="c.mp4", size=1, last_modified=100),
+        RemoteObject(key="source_videos/d.mp4", filename="d.mp4", size=1, last_modified=200),
+        RemoteObject(key="source_videos/e.mp4", filename="e.mp4", size=1, last_modified=300),
+    ]
+    # e is used; then b (newest), d, then a/c tie in key order; e wraps at the end.
+    queue, new_cycle = build_source_video_queue(remote, {"e.mp4"})
+    assert new_cycle is False
+    assert [o.filename for o in queue] == ["b.mp4", "d.mp4", "a.mp4", "c.mp4", "e.mp4"]

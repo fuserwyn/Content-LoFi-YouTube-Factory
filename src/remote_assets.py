@@ -35,6 +35,8 @@ class RemoteObject:
     key: str
     filename: str
     size: int
+    # Upload time (epoch seconds) — newest unused footage is used first.
+    last_modified: float = 0.0
 
 
 def build_s3_client(cfg: S3SyncConfig):
@@ -78,7 +80,15 @@ def list_prefix_objects(
                 continue
             if allowed_suffixes is not None and Path(filename).suffix.lower() not in allowed_suffixes:
                 continue
-            found.append(RemoteObject(key=key, filename=filename, size=int(obj.get("Size") or 0)))
+            modified = obj.get("LastModified")
+            found.append(
+                RemoteObject(
+                    key=key,
+                    filename=filename,
+                    size=int(obj.get("Size") or 0),
+                    last_modified=modified.timestamp() if modified is not None else 0.0,
+                )
+            )
     found.sort(key=lambda o: o.key)
     return found
 
@@ -125,7 +135,7 @@ def build_source_video_queue(
     remote: list[RemoteObject],
     used_filenames: set[str],
 ) -> tuple[list[RemoteObject], bool]:
-    """Build download order: unused first (stable), then wrap from the start of the library.
+    """Build download order: unused first (newest upload first), then wrap from the start of the library.
 
     Returns (queue, started_new_cycle). ``started_new_cycle`` is True when every remote
     file was already marked — caller should clear markers and treat this as a fresh cycle.
@@ -138,7 +148,8 @@ def build_source_video_queue(
         # Full wrap: start again from the beginning of the library.
         return list(remote), True
 
-    queue: list[RemoteObject] = list(unused)
+    # Fresh uploads go next; ``remote`` is key-sorted, so ties keep key order (sort is stable).
+    queue: list[RemoteObject] = sorted(unused, key=lambda o: o.last_modified, reverse=True)
     seen = {o.filename for o in queue}
     for o in remote:
         if o.filename in seen:
