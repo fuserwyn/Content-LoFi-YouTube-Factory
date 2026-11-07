@@ -22,3 +22,13 @@ def test_load_local_clips_skips_unprobeable_files(tmp_path: Path) -> None:
         recently_used_clip_urls=set(),
     )
     assert clips == []
+
+
+def test_meets_min_resolution_is_orientation_agnostic() -> None:
+    from src.fetch_assets import meets_min_resolution
+
+    assert meets_min_resolution(1920, 1080, 1920, 1080)
+    assert meets_min_resolution(1080, 1920, 1920, 1080)
+    assert meets_min_resolution(2160, 3840, 1920, 1080)
+    assert not meets_min_resolution(720, 1280, 1920, 1080)
+    assert not meets_min_resolution(1080, 1080, 1920, 1080)

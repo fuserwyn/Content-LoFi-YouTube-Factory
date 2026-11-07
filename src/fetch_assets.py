@@ -25,6 +25,17 @@ class ClipAsset:
     license: str
 
 
+def meets_min_resolution(width: int, height: int, min_width: int, min_height: int) -> bool:
+    """Orientation-agnostic size check: 1080x1920 passes a 1920x1080 minimum.
+
+    The renderer crops any source to the output aspect, so portrait and landscape
+    footage are both usable; only the short/long sides must be big enough.
+    """
+    return min(width, height) >= min(min_width, min_height) and max(width, height) >= max(
+        min_width, min_height
+    )
+
+
 def _choose_file(video_files: list[dict], min_width: int, min_height: int) -> dict | None:
     suitable = [
         vf
@@ -165,9 +176,7 @@ def load_local_clips(
                 continue
             if metadata["duration"] < min_clip_seconds:
                 continue
-            if metadata["width"] < min_width or metadata["height"] < min_height:
-                continue
-            if metadata["width"] < metadata["height"]:
+            if not meets_min_resolution(metadata["width"], metadata["height"], min_width, min_height):
                 continue
 
             selected.append(

@@ -195,3 +195,38 @@ def test_sync_prefix_skips_used_filenames(tmp_path: Path) -> None:
     )
     assert [p.name for p in downloaded] == ["b.mp4"]
     assert client.downloads == ["source_videos/b.mp4"]
+
+
+def test_download_source_video_batch_accepts_portrait_and_landscape(tmp_path: Path, monkeypatch) -> None:
+    """Output is cropped to the render aspect, so 9:16 sources are as valid as 16:9 ones."""
+    import src.remote_assets as remote_assets
+    from src.remote_assets import download_source_video_batch
+
+    sizes = {
+        "portrait.mp4": (1080, 1920),
+        "landscape.mp4": (1920, 1080),
+        "small_portrait.mp4": (720, 1280),
+    }
+    monkeypatch.setattr(
+        remote_assets,
+        "_probe_video",
+        lambda p: {"width": sizes[p.name][0], "height": sizes[p.name][1], "duration": 30},
+    )
+    client = FakeS3Client({f"source_videos/{name}": b"x" for name in sizes})
+
+    clips, markers, _ = download_source_video_batch(
+        client,
+        bucket="bucket",
+        prefix="source_videos",
+        dest_dir=tmp_path / "videos",
+        used_filenames=set(),
+        batch_size=5,
+        min_total_seconds=1000,
+        min_clip_seconds=3,
+        min_width=1920,
+        min_height=1080,
+    )
+
+    assert sorted(markers) == ["landscape.mp4", "portrait.mp4"]
+    assert {(c.width, c.height) for c in clips} == {(1080, 1920), (1920, 1080)}
+    assert not (tmp_path / "videos" / "small_portrait.mp4").exists()

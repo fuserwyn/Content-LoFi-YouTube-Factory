@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 
-from .fetch_assets import LOCAL_VIDEO_EXTENSIONS, ClipAsset, _probe_video
+from .fetch_assets import LOCAL_VIDEO_EXTENSIONS, ClipAsset, _probe_video, meets_min_resolution
 from .select_track import SUPPORTED_EXTENSIONS as TRACK_EXTENSIONS
 
 
@@ -205,7 +205,7 @@ def download_source_video_batch(
             LOGGER.warning("REMOTE_SYNC: too short (%ss) %s; skipping", metadata["duration"], dest)
             dest.unlink(missing_ok=True)
             continue
-        if metadata["width"] < min_width or metadata["height"] < min_height:
+        if not meets_min_resolution(metadata["width"], metadata["height"], min_width, min_height):
             LOGGER.warning(
                 "REMOTE_SYNC: resolution %sx%s below %sx%s for %s; skipping",
                 metadata["width"],
@@ -216,11 +216,6 @@ def download_source_video_batch(
             )
             dest.unlink(missing_ok=True)
             continue
-        if metadata["width"] < metadata["height"]:
-            LOGGER.warning("REMOTE_SYNC: portrait clip skipped %s", dest)
-            dest.unlink(missing_ok=True)
-            continue
-
         clips.append(
             ClipAsset(
                 source_video_id=index + 1,
